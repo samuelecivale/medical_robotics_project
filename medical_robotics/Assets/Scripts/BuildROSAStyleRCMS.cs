@@ -1,6 +1,6 @@
 using UnityEngine;
 
-public class BuildROSAStyleRCMScene : MonoBehaviour
+public class BuildROSAStyleRCMS : MonoBehaviour
 {
     [ContextMenu("Build ROSA-like RCM Scene")]
     public void Build()
@@ -16,6 +16,9 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
         DestroyIfExists("Entry_Label");
         DestroyIfExists("Target_Label");
         DestroyIfExists("Trajectory_Line");
+        DestroyIfExists("DemoFloor");
+
+        DisableOldControllers();
 
         Material robotMat = MakeMaterial("ROSA_White", new Color(0.82f, 0.84f, 0.84f, 1f), false);
         Material darkMat = MakeMaterial("ROSA_Dark", new Color(0.18f, 0.20f, 0.22f, 1f), false);
@@ -40,11 +43,11 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
 
         Vector3[] linkVectors =
         {
-            new Vector3(0.00f, 0.62f, 0.00f),   // vertical lift
-            new Vector3(0.58f, 0.28f, 0.00f),   // shoulder link
-            new Vector3(0.68f, -0.08f, 0.00f),  // forearm
-            new Vector3(0.38f, 0.04f, 0.00f),   // wrist 1
-            new Vector3(0.27f, 0.00f, 0.00f)    // wrist 2
+            new Vector3(0.00f, 0.62f, 0.00f),
+            new Vector3(0.58f, 0.28f, 0.00f),
+            new Vector3(0.68f, -0.08f, 0.00f),
+            new Vector3(0.38f, 0.04f, 0.00f),
+            new Vector3(0.27f, 0.00f, 0.00f)
         };
 
         float[] radii =
@@ -78,7 +81,6 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
             currentJoint = nextJoint;
         }
 
-        // Final guide holder, like a compact surgical wrist/tool support.
         Vector3 finalGuideVector = new Vector3(0.50f, 0f, 0f);
 
         CreateCylinder(
@@ -93,21 +95,28 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
         Transform toolFrame = CreateEmpty("ToolFrame", currentJoint, finalGuideVector);
         toolFrame.localRotation = Quaternion.Euler(0f, 90f, 0f);
 
+        const float needleLength = 1.50f;
+
         CreateCylinder(
             "ToolVisual_Needle",
             toolFrame,
-            new Vector3(0f, 0f, 0.75f),
-            new Vector3(0f, 0f, 1.50f),
+            new Vector3(0f, 0f, needleLength * 0.5f),
+            new Vector3(0f, 0f, needleLength),
             0.018f,
             toolMat
         );
 
-        // Create a simple skull/head model in front of the tool.
-        Vector3 entryPos = new Vector3(3.05f, 1.34f, 0.25f);
-        Vector3 targetPos = new Vector3(3.48f, 1.50f, 0.50f);
-        Vector3 skullCenter = new Vector3(3.38f, 1.46f, 0.45f);
+        Transform toolTip = CreateEmpty("ToolTip", toolFrame, new Vector3(0f, 0f, needleLength));
+        CreatePointVisual("ToolTip_Visual", toolTip, toolMat, 0.035f);
 
-        CreateSkull(skullCenter, skullMat);
+        // Entry is on the skull boundary.
+        // Target is inside the skull.
+        // The ideal needle axis is the segment entry -> target.
+        Vector3 skullCenter = new Vector3(3.35f, 1.32f, 0.26f);
+        Vector3 entryPos = new Vector3(3.06f, 1.32f, 0.26f);
+        Vector3 targetPos = new Vector3(3.43f, 1.32f, 0.26f);
+
+        GameObject skull = CreateSkull(skullCenter, skullMat);
 
         Transform entry = CreatePoint("EntryPoint", entryPos, entryMat, 0.075f);
         Transform target = CreatePoint("TargetPoint", targetPos, targetMat, 0.075f);
@@ -125,9 +134,9 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
         AddLabel("ENTRY", entryPos + new Vector3(0f, 0.16f, 0f), entryMat.color);
         AddLabel("TARGET", targetPos + new Vector3(0f, 0.16f, 0f), targetMat.color);
 
-        DoubleRCMUnityController controller = GetComponent<DoubleRCMUnityController>();
+        DoubleRCMUnityController2 controller = GetComponent<DoubleRCMUnityController2>();
         if (controller == null)
-            controller = gameObject.AddComponent<DoubleRCMUnityController>();
+            controller = gameObject.AddComponent<DoubleRCMUnityController2>();
 
         controller.joints = joints;
         controller.jointAxesLocal = new Vector3[]
@@ -141,20 +150,63 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
         };
 
         controller.toolFrame = toolFrame;
+        controller.toolTip = toolTip;
+        controller.autoCreateToolTip = false;
+        controller.toolLength = needleLength;
+
         controller.entryPoint = entry;
         controller.targetPoint = target;
+        controller.skullCollider = skull.GetComponent<Collider>();
+        controller.skullPlaneNormalReference = entry;
 
-        controller.mode = DoubleRCMUnityController.RCMMode.Double;
-        controller.solverIterations = 2;
-        controller.damping = 0.12f;
+        controller.mode = DoubleRCMUnityController2.RCMMode.Double;
+
+        controller.solverIterations = 1;
+        controller.damping = 0.20f;
         controller.finiteDifferenceDeg = 0.5f;
-        controller.maxDeltaDegPerIteration = 0.4f;
+        controller.maxDeltaDegPerIteration = 0.08f;
+        controller.ikStepScale = 0.08f;
+
+        controller.entryWeight = 3.0f;
+        controller.targetTipWeight = 2.0f;
+        controller.skullAvoidanceWeight = 4.0f;
+        controller.avoidArmLinksFromSkull = true;
+        controller.armSkullAvoidanceWeight = 12.0f;
+        controller.armSafetyMargin = 0.10f;
+        controller.armAvoidanceSamplesPerSegment = 6;
+        controller.useFiniteNeedleSegmentForEntry = true;
+
+        controller.useDemoStartPose = true;
+        controller.demoWaitBeforeSolving = 1.0f;
+        controller.demoJointAnglesDeg = new float[]
+        {
+            45f,
+            -35f,
+            45f,
+            -25f,
+            30f,
+            20f
+        };
 
         controller.logToCsv = true;
         controller.logFileName = "rcm_log.csv";
         controller.logEverySeconds = 0.02f;
 
         SetupCameraAndLights();
+    }
+
+    private void DisableOldControllers()
+    {
+        MonoBehaviour[] behaviours = GetComponents<MonoBehaviour>();
+
+        foreach (MonoBehaviour behaviour in behaviours)
+        {
+            if (behaviour == null)
+                continue;
+
+            if (behaviour.GetType().Name == "DoubleRCMUnityController")
+                behaviour.enabled = false;
+        }
     }
 
     private void ClearRobotChildren()
@@ -222,15 +274,23 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
         shoulderCover.GetComponent<Renderer>().material = robotMat;
     }
 
-    private void CreateSkull(Vector3 center, Material skullMat)
+    private GameObject CreateSkull(Vector3 center, Material skullMat)
     {
         GameObject skull = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         skull.name = "SurgicalSkull";
         skull.transform.position = center;
-        skull.transform.rotation = Quaternion.Euler(0f, 0f, 0f);
-        skull.transform.localScale = new Vector3(0.48f, 0.58f, 0.40f);
-        RemoveCollider(skull);
-        skull.GetComponent<Renderer>().material = skullMat;
+        skull.transform.rotation = Quaternion.identity;
+        skull.transform.localScale = new Vector3(0.58f, 0.62f, 0.48f);
+
+        Renderer renderer = skull.GetComponent<Renderer>();
+        if (renderer != null)
+            renderer.material = skullMat;
+
+        SphereCollider collider = skull.GetComponent<SphereCollider>();
+        if (collider == null)
+            collider = skull.AddComponent<SphereCollider>();
+
+        return skull;
     }
 
     private Transform CreatePoint(string name, Vector3 position, Material mat, float radius)
@@ -240,15 +300,20 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
         point.transform.rotation = Quaternion.identity;
         point.transform.localScale = Vector3.one;
 
+        CreatePointVisual(name + "_Sphere", point.transform, mat, radius);
+
+        return point.transform;
+    }
+
+    private void CreatePointVisual(string name, Transform parent, Material mat, float radius)
+    {
         GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        sphere.name = name + "_Sphere";
-        sphere.transform.SetParent(point.transform, false);
+        sphere.name = name;
+        sphere.transform.SetParent(parent, false);
         sphere.transform.localPosition = Vector3.zero;
         sphere.transform.localScale = Vector3.one * radius;
         RemoveCollider(sphere);
         sphere.GetComponent<Renderer>().material = mat;
-
-        return point.transform;
     }
 
     private void CreateJointVisual(Transform parent, Material mat, float radius)
@@ -264,46 +329,49 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
     }
 
     private void CreateCylinder(
-    string name,
-    Transform parent,
-    Vector3 localPosition,
-    Vector3 direction,
-    float radius,
-    Material mat,
-    bool worldSpace = false
-)
-{
-    GameObject cyl = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-    cyl.name = name;
-
-    Quaternion rot = Quaternion.FromToRotation(Vector3.up, direction.normalized);
-
-    if (parent != null)
+        string name,
+        Transform parent,
+        Vector3 localPosition,
+        Vector3 direction,
+        float radius,
+        Material mat,
+        bool worldSpace = false
+    )
     {
-        cyl.transform.SetParent(parent, false);
+        if (direction.sqrMagnitude < 1e-8f)
+            return;
 
-        if (worldSpace)
+        GameObject cyl = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        cyl.name = name;
+
+        Quaternion rot = Quaternion.FromToRotation(Vector3.up, direction.normalized);
+
+        if (parent != null)
+        {
+            cyl.transform.SetParent(parent, false);
+
+            if (worldSpace)
+            {
+                cyl.transform.position = localPosition;
+                cyl.transform.rotation = rot;
+            }
+            else
+            {
+                cyl.transform.localPosition = localPosition;
+                cyl.transform.localRotation = rot;
+            }
+        }
+        else
         {
             cyl.transform.position = localPosition;
             cyl.transform.rotation = rot;
         }
-        else
-        {
-            cyl.transform.localPosition = localPosition;
-            cyl.transform.localRotation = rot;
-        }
-    }
-    else
-    {
-        cyl.transform.position = localPosition;
-        cyl.transform.rotation = rot;
-    }
 
-    cyl.transform.localScale = new Vector3(radius, direction.magnitude * 0.5f, radius);
+        cyl.transform.localScale = new Vector3(radius, direction.magnitude * 0.5f, radius);
 
-    RemoveCollider(cyl);
-    cyl.GetComponent<Renderer>().material = mat;
-}
+        RemoveCollider(cyl);
+        cyl.GetComponent<Renderer>().material = mat;
+    }
 
     private void CreateFloor(Material mat)
     {
@@ -341,10 +409,12 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
 
     private Material MakeMaterial(string name, Color color, bool transparent)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-
-        if (shader == null)
-            shader = Shader.Find("Standard");
+        Shader shader =
+            Shader.Find("Universal Render Pipeline/Lit") ??
+            Shader.Find("HDRP/Lit") ??
+            Shader.Find("Standard") ??
+            Shader.Find("Sprites/Default") ??
+            Shader.Find("Unlit/Color");
 
         Material mat = new Material(shader);
         mat.name = name;
@@ -407,7 +477,7 @@ public class BuildROSAStyleRCMScene : MonoBehaviour
             cam.orthographicSize = 1.75f;
         }
 
-        Light existing = FindObjectOfType<Light>();
+        Light existing = Object.FindAnyObjectByType<Light>();
 
         if (existing == null)
         {
