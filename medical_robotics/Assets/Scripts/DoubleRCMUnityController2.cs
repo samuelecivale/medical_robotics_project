@@ -8,6 +8,7 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     public enum RCMMode
     {
         Entry,
+        EntryTipCone,
         Target,
         Double
     }
@@ -82,6 +83,13 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     public float allowedEntryRadiusMm = 3f;
     public float skullAvoidanceWeight = 0.8f;
 
+    [Header("Needle-skull avoidance")]
+    public bool avoidNeedleFromSkullBeforeInsertion = true;
+    public float needleSkullAvoidanceWeight = 10.0f;
+    public float needleSafetyMargin = 0.015f;
+    public int needleAvoidanceSamples = 12;
+    public float needleInsertionCorridorRadiusMm = 10.0f;
+
     [Header("Arm-skull avoidance")]
     [Tooltip("Avoids the arm links entering the skull. The needle segment is excluded, because it must enter the skull.")]
     public bool avoidArmLinksFromSkull = true;
@@ -101,6 +109,22 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     [Header("Target-RCM mode + entry cone")]
     [Tooltip("When mode = Target, the target point is treated as the RCM and the shaft may move inside a small cone at the entry side.")]
     public bool useEntryConeInTargetMode = true;
+
+    [Header("Entry-RCM mode + tip cone around target")]
+    [Tooltip("If true, mode [4] keeps the entry point fixed as RCM and moves the tip around the target with a small conical motion.")]
+    public bool useTipConeAroundTargetMode = true;
+
+    [Range(0.1f, 20f)]
+    public float tipConeHalfAngleDeg = 4.0f;
+
+    [Range(0f, 1f)]
+    public float tipConeMotionFraction = 0.75f;
+
+    public float tipConeFrequencyHz = 0.15f;
+
+    public float entryTipConeRCMWeight = 5.0f;
+    public float entryTipConeTipWeight = 2.5f;
+    public float entryTipConeAxisWeight = 0.8f;
 
     [Tooltip("If true, mode [2] actively demonstrates a small conical motion while the target RCM remains fixed.")]
     public bool animateTargetConeDemo = true;
@@ -201,6 +225,11 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
     [Header("Overlay")]
     public bool showOverlay = true;
+    public bool overlayOnRightSide = true;
+    public float overlayMargin = 20f;
+    public float overlayWidth = 380f;
+    public float overlayTop = 20f;
+    public float overlayBottomMargin = 20f;
 
     [Header("Debug")]
     public float tipEntryErrorMm;
@@ -375,10 +404,41 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (insertionPhase != InsertionPhase.InsertToTarget || !useProgressiveStraightInsertion)
             return;
 
-        float currentErrorMm = Vector3.Distance(GetToolTipPosition(), GetCurrentInsertionTargetPoint()) * 1000f;
+        if (entryPoint == null || targetPoint == null || toolTip == null)
+            return;
 
-        if (currentErrorMm <= insertionProgressAdvanceErrorMm || insertionProgress < 0.02f)
-            insertionProgress = Mathf.Clamp01(insertionProgress + Time.deltaTime * Mathf.Max(0.01f, insertionProgressSpeed));
+        Vector3 entry = entryPoint.position;
+        Vector3 target = targetPoint.position;
+        Vector3 axis = target - entry;
+
+        float length = axis.magnitude;
+
+        if (length < 1e-5f)
+            return;
+
+        Vector3 dir = axis / length;
+        Vector3 tip = GetToolTipPosition();
+
+        float along = Vector3.Dot(tip - entry, dir);
+        float actualProgress = Mathf.Clamp01(along / length);
+
+        Vector3 projectedTip = entry + dir * Mathf.Clamp(along, 0f, length);
+        float lateralErrorMm = Vector3.Distance(tip, projectedTip) * 1000f;
+
+        bool entryStable = entryRCMFormulaErrorMm <= 16.0f;
+        bool axisStable = entryTargetAxisErrorDeg <= 10.0f;
+        bool nearLine = lateralErrorMm <= 18.0f;
+
+        if (!entryStable || !axisStable || !nearLine)
+            return;
+
+        float desiredProgress = Mathf.Clamp01(actualProgress + 0.025f);
+
+        insertionProgress = Mathf.MoveTowards(
+            insertionProgress,
+            desiredProgress,
+            Time.deltaTime * Mathf.Max(0.01f, insertionProgressSpeed)
+        );
     }
 
     private void EnsureAutoToolTip()
@@ -446,6 +506,24 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             useInsertionSequence = true;
             insertionPhase = InsertionPhase.ApproachEntry;
             insertionProgress = 0f;
+            rcmParametersInitialized = false;
+        }
+        if (Input.GetKeyDown(KeyCode.Alpha4))
+        {
+            // Entry-RCM + tip cone around target.
+            mode = RCMMode.EntryTipCone;
+            useInsertionSequence = false;
+            insertionPhase = InsertionPhase.Done;
+
+            // In mode 4 the entry must be a point on the shaft, not necessarily the tip.
+            entryLambda = 0.65f;
+            optimizeEntryLambda = true;
+            initializeLambdaFromClosestPoint = true;
+
+            // The physical tip follows the conical trajectory around the target.
+            targetLambda = 1.0f;
+            optimizeTargetLambda = false;
+
             rcmParametersInitialized = false;
         }
 
@@ -557,6 +635,9 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (!rcmParametersInitialized)
             InitializeRCMParametersFromClosestPoints();
 
+        if (useInsertionSequence && insertionPhase == InsertionPhase.InsertToTarget)
+            UpdateEntryLambdaFromInsertionDepth();
+
         Vector3[] errorVectors = GetCurrentErrorVectors();
 
         int m = errorVectors.Length * 3;
@@ -580,6 +661,20 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         ApplySolutionStep(dx);
     }
 
+    private void UpdateEntryLambdaFromInsertionDepth()
+    {
+        if (entryPoint == null || targetPoint == null)
+            return;
+
+        float totalInsertionLength = Vector3.Distance(entryPoint.position, targetPoint.position);
+        float insertionDepth = totalInsertionLength * Mathf.Clamp01(insertionProgress);
+        float safeToolLength = Mathf.Max(0.001f, toolLength);
+
+        // At the start the entry is close to the tip (lambda = 1).
+        // As the needle enters, the entry point slides back along the shaft.
+        entryLambda = Mathf.Clamp01(1.0f - insertionDepth / safeToolLength);
+    }
+
     private Vector3[] GetCurrentErrorVectors()
     {
         if (useInsertionSequence)
@@ -593,6 +688,11 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             entryErrors.Add(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
             AddSkullAvoidanceErrors(entryErrors);
             return entryErrors.ToArray();
+        }
+
+        if (mode == RCMMode.EntryTipCone)
+        {
+            return GetEntryRCMWithTipConeAroundTargetErrorVectors();
         }
 
         if (mode == RCMMode.Target)
@@ -643,10 +743,15 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             Vector3 insertionTarget = GetCurrentInsertionTargetPoint();
 
             errors.Add(insertionEntryWeight * GetEntryErrorVector(entryPoint.position));
-            errors.Add(insertionTargetWeight * GetTargetTaskErrorVector(insertionTarget));
+
+            // During insertion the physical tip must advance along the Entry -> Target line.
+            // Do not constrain the target through another free RCM point here.
+            errors.Add(insertionTargetWeight * TipToPointErrorVector(insertionTarget));
+
             errors.Add(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
 
-            AddSkullAvoidanceErrors(errors);
+            // The needle is allowed to enter; only the arm links avoid the skull.
+            AddArmSkullAvoidanceErrors(errors);
             return errors.ToArray();
         }
 
@@ -657,12 +762,71 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
     private void AddSkullAvoidanceErrors(List<Vector3> errors)
     {
-        if (avoidSkullInDouble)
-            errors.Add(skullAvoidanceWeight * SkullEntryErrorVector());
-
+        AddNeedleSkullAvoidanceErrors(errors);
         AddArmSkullAvoidanceErrors(errors);
     }
+    private void AddNeedleSkullAvoidanceErrors(List<Vector3> errors)
+    {
+        int samples = Mathf.Max(2, needleAvoidanceSamples);
 
+        if (!avoidNeedleFromSkullBeforeInsertion || skullCollider == null || toolFrame == null || toolTip == null)
+        {
+            for (int i = 0; i < samples; i++)
+                errors.Add(Vector3.zero);
+
+            return;
+        }
+
+        Vector3 basePos = GetToolBasePosition();
+        Vector3 tipPos = GetToolTipPosition();
+
+        bool realInsertion =
+            useInsertionSequence &&
+            insertionPhase == InsertionPhase.InsertToTarget &&
+            entryRCMFormulaErrorMm <= 10.0f &&
+            entryTargetAxisErrorDeg <= 10.0f;
+
+        for (int i = 0; i < samples; i++)
+        {
+            float t = samples == 1 ? 0f : (float)i / (float)(samples - 1);
+            Vector3 p = Vector3.Lerp(basePos, tipPos, t);
+
+            if (realInsertion && IsPointInsideNeedleInsertionCorridor(p))
+            {
+                errors.Add(Vector3.zero);
+                continue;
+            }
+
+            Vector3 push = ComputePushOutOfSkull(p, needleSafetyMargin);
+            errors.Add(needleSkullAvoidanceWeight * push);
+        }
+    }
+    private bool IsPointInsideNeedleInsertionCorridor(Vector3 point)
+    {
+        if (entryPoint == null || targetPoint == null)
+            return false;
+
+        Vector3 entry = entryPoint.position;
+        Vector3 target = targetPoint.position;
+        Vector3 axis = target - entry;
+
+        float length = axis.magnitude;
+
+        if (length < 1e-5f)
+            return false;
+
+        Vector3 dir = axis / length;
+
+        float along = Vector3.Dot(point - entry, dir);
+
+        if (along < -0.015f || along > length + 0.015f)
+            return false;
+
+        Vector3 projected = entry + dir * Mathf.Clamp(along, 0f, length);
+        float lateralDistanceMm = Vector3.Distance(point, projected) * 1000f;
+
+        return lateralDistanceMm <= needleInsertionCorridorRadiusMm;
+    }
     private void AddArmSkullAvoidanceErrors(List<Vector3> errors)
     {
         int samples = Mathf.Max(2, armAvoidanceSamplesPerSegment);
@@ -676,6 +840,7 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             return;
         }
 
+        // Joint-to-joint links are real robot arm links and must stay outside.
         for (int i = 0; i < joints.Length - 1; i++)
         {
             if (joints[i] == null || joints[i + 1] == null)
@@ -684,10 +849,16 @@ public class DoubleRCMUnityController2 : MonoBehaviour
                 AddSegmentSkullAvoidanceErrors(errors, joints[i].position, joints[i + 1].position, samples);
         }
 
-        if (joints[joints.Length - 1] != null && toolFrame != null)
-            AddSegmentSkullAvoidanceErrors(errors, joints[joints.Length - 1].position, toolFrame.position, samples);
-        else
+        // During insertion, do not push the distal carrier / tool-frame segment
+        // away from the skull. The needle must be able to enter through the entry.
+        bool skipLastSegment =
+            useInsertionSequence &&
+            insertionPhase == InsertionPhase.InsertToTarget;
+
+        if (skipLastSegment || joints[joints.Length - 1] == null || toolFrame == null)
             AddZeroAvoidanceSamples(errors, samples);
+        else
+            AddSegmentSkullAvoidanceErrors(errors, joints[joints.Length - 1].position, toolFrame.position, samples);
     }
 
     private int GetExpectedArmAvoidanceSegments()
@@ -720,13 +891,18 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
     private Vector3 ComputePushOutOfSkull(Vector3 point)
     {
+        return ComputePushOutOfSkull(point, armSafetyMargin);
+    }
+
+    private Vector3 ComputePushOutOfSkull(Vector3 point, float safetyMargin)
+    {
         if (skullCollider == null)
             return Vector3.zero;
 
         Bounds b = skullCollider.bounds;
         Vector3 center = b.center;
 
-        Vector3 radii = b.extents + Vector3.one * Mathf.Max(0f, armSafetyMargin);
+        Vector3 radii = b.extents + Vector3.one * Mathf.Max(0f, safetyMargin);
         radii.x = Mathf.Max(radii.x, 1e-4f);
         radii.y = Mathf.Max(radii.y, 1e-4f);
         radii.z = Mathf.Max(radii.z, 1e-4f);
@@ -744,9 +920,12 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         Vector3 dir = qNorm < 1e-5f ? Vector3.up : q / qNorm;
 
-        Vector3 safePoint = center + new Vector3(dir.x * radii.x, dir.y * radii.y, dir.z * radii.z);
+        Vector3 safePoint = center + new Vector3(
+            dir.x * radii.x,
+            dir.y * radii.y,
+            dir.z * radii.z
+        );
 
-        // Error convention is desired - current.
         return safePoint - point;
     }
 
@@ -766,7 +945,11 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             maxViolation = Mathf.Max(maxViolation, GetMaxSegmentSkullViolation(joints[i].position, joints[i + 1].position, samples));
         }
 
-        if (joints[joints.Length - 1] != null && toolFrame != null)
+        bool skipLastSegment =
+            useInsertionSequence &&
+            insertionPhase == InsertionPhase.InsertToTarget;
+
+        if (!skipLastSegment && joints[joints.Length - 1] != null && toolFrame != null)
             maxViolation = Mathf.Max(maxViolation, GetMaxSegmentSkullViolation(joints[joints.Length - 1].position, toolFrame.position, samples));
 
         return maxViolation;
@@ -831,10 +1014,8 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         Vector3 actual = GetToolDirection();
 
-        // For line alignment, choose the sign of the tool axis that is closest to Entry -> Target.
-        if (Vector3.Dot(actual, desired) < 0f)
-            actual = -actual;
-
+        // Directed alignment: do not flip the tool axis.
+        // This prevents the solver from treating insertion from below as equivalent to insertion from above.
         float sampleLength = Mathf.Max(0.05f, length);
         Vector3 actualSample = entryPoint.position + actual * sampleLength;
         Vector3 desiredSample = entryPoint.position + desired * sampleLength;
@@ -855,9 +1036,7 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         desired.Normalize();
         Vector3 actual = GetToolDirection();
 
-        if (Vector3.Dot(actual, desired) < 0f)
-            actual = -actual;
-
+        // Directed angle: do not flip the tool axis.
         return Vector3.Angle(desired, actual);
     }
 
@@ -879,6 +1058,95 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         }
 
         return EntryConeLimitErrorVector(nominalDir, actualDir, sampleLength);
+    }
+    private Vector3[] GetEntryRCMWithTipConeAroundTargetErrorVectors()
+    {
+        List<Vector3> errors = new List<Vector3>();
+
+        errors.Add(entryTipConeRCMWeight * GetEntryErrorVector(entryPoint.position));
+
+        Vector3 desiredTip = GetTipConePointAroundTarget();
+        errors.Add(entryTipConeTipWeight * TipToPointErrorVector(desiredTip));
+
+        errors.Add(entryTipConeAxisWeight * EntryTipConeAxisErrorVector(desiredTip));
+
+        // Mode 4: allow the needle motion, avoid only the arm.
+        AddArmSkullAvoidanceErrors(errors);
+
+        return errors.ToArray();
+    }
+
+    private Vector3 GetTipConePointAroundTarget()
+    {
+        if (entryPoint == null || targetPoint == null)
+            return Vector3.zero;
+
+        Vector3 nominal = targetPoint.position - entryPoint.position;
+        float length = nominal.magnitude;
+
+        if (length < 1e-6f)
+            return targetPoint.position;
+
+        Vector3 nominalDir = nominal / length;
+
+        if (!useTipConeAroundTargetMode)
+            return targetPoint.position;
+
+        Vector3 coneDir = GetAnimatedTipConeDirectionFromEntry(nominalDir);
+
+        // Cone vertex = entry point.
+        // The tip stays at approximately the same insertion depth,
+        // but rotates around the nominal target direction.
+        return entryPoint.position + coneDir * length;
+    }
+
+    private Vector3 GetAnimatedTipConeDirectionFromEntry(Vector3 nominalDir)
+    {
+        Vector3 u;
+        Vector3 v;
+        GetConeBasis(nominalDir, out u, out v);
+
+        float angleDeg = Mathf.Clamp(
+            tipConeHalfAngleDeg * tipConeMotionFraction,
+            0f,
+            tipConeHalfAngleDeg
+        );
+
+        float theta = 2f * Mathf.PI * Mathf.Max(0.01f, tipConeFrequencyHz) * Time.time;
+
+        Vector3 radialAxis =
+            Mathf.Cos(theta) * u +
+            Mathf.Sin(theta) * v;
+
+        Quaternion rot = Quaternion.AngleAxis(angleDeg, radialAxis.normalized);
+
+        return (rot * nominalDir).normalized;
+    }
+
+    private Vector3 EntryTipConeAxisErrorVector(Vector3 desiredTip)
+    {
+        if (entryPoint == null || toolFrame == null)
+            return Vector3.zero;
+
+        Vector3 desired = desiredTip - entryPoint.position;
+
+        if (desired.sqrMagnitude < 1e-8f)
+            return Vector3.zero;
+
+        desired.Normalize();
+
+        Vector3 actual = GetToolDirection();
+
+        // Axis direction can be opposite depending on tool frame convention.
+        if (Vector3.Dot(actual, desired) < 0f)
+            actual = -actual;
+
+        float sampleLength = Mathf.Max(0.05f, Vector3.Distance(entryPoint.position, desiredTip));
+
+        Vector3 actualSample = entryPoint.position + actual * sampleLength;
+        Vector3 desiredSample = entryPoint.position + desired * sampleLength;
+
+        return desiredSample - actualSample;
     }
 
     private Vector3 EntryConeLimitErrorVector(Vector3 nominalDir, Vector3 actualDir, float sampleLength)
@@ -1118,6 +1386,11 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (!TryGetSkullIntersection(out hitPoint))
             return Vector3.zero;
 
+        // The surgical needle is allowed to cross the skull only if the
+        // intersection is close to the intended entry-target corridor.
+        if (IsPointInsideEntryTargetCorridor(hitPoint))
+            return Vector3.zero;
+
         float allowedRadius = allowedEntryRadiusMm * 0.001f;
         float distanceFromEntry = Vector3.Distance(hitPoint, entryPoint.position);
 
@@ -1125,6 +1398,30 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             return Vector3.zero;
 
         return entryPoint.position - hitPoint;
+    }
+
+    private bool IsPointInsideEntryTargetCorridor(Vector3 point)
+    {
+        if (entryPoint == null || targetPoint == null)
+            return false;
+
+        Vector3 corridor = targetPoint.position - entryPoint.position;
+        float corridorLength = corridor.magnitude;
+
+        if (corridorLength < 1e-5f)
+            return false;
+
+        Vector3 corridorDir = corridor / corridorLength;
+        float along = Vector3.Dot(point - entryPoint.position, corridorDir);
+        Vector3 projected = entryPoint.position + corridorDir * Mathf.Clamp(along, 0f, corridorLength);
+        float lateralDistance = Vector3.Distance(point, projected);
+
+        // allowedEntryRadiusMm is the strict trocar radius.
+        // Add a small visual/IK tolerance so the demo does not fight tiny
+        // collider/raycast errors.
+        float corridorRadius = allowedEntryRadiusMm * 0.001f + 0.015f;
+
+        return lateralDistance <= corridorRadius;
     }
 
     private float GetSkullViolationDistance()
@@ -1135,6 +1432,9 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         Vector3 hitPoint;
 
         if (!TryGetSkullIntersection(out hitPoint))
+            return 0f;
+
+        if (IsPointInsideEntryTargetCorridor(hitPoint))
             return 0f;
 
         float allowedRadius = allowedEntryRadiusMm * 0.001f;
@@ -1335,6 +1635,17 @@ public class DoubleRCMUnityController2 : MonoBehaviour
                 continue;
 
             float deltaDeg = dx[i] * Mathf.Rad2Deg * ikStepScale;
+
+            if (useInsertionSequence && insertionPhase == InsertionPhase.InsertToTarget)
+            {
+                if (i == 3)
+                    deltaDeg *= 0.55f;
+                else if (i == 4)
+                    deltaDeg *= 0.35f;
+                else if (i == 5)
+                    deltaDeg *= 0.20f;
+            }
+
             deltaDeg = Mathf.Clamp(deltaDeg, -maxDeltaDegPerIteration, maxDeltaDegPerIteration);
 
             ApplyJointDeltaDeg(i, deltaDeg);
@@ -1841,13 +2152,22 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             return;
 
         labelStyle = new GUIStyle(GUI.skin.label);
-        labelStyle.fontSize = 13;
+        labelStyle.fontSize = 16;
         labelStyle.normal.textColor = Color.white;
-        labelStyle.alignment = TextAnchor.MiddleLeft;
+        labelStyle.alignment = TextAnchor.UpperLeft;
+        labelStyle.wordWrap = true;
 
         titleStyle = new GUIStyle(labelStyle);
-        titleStyle.fontSize = 17;
+        titleStyle.fontSize = 22;
         titleStyle.fontStyle = FontStyle.Bold;
+        titleStyle.wordWrap = true;
+    }
+
+    private void DrawOverlayLine(ref float y, float x, float width, string text, GUIStyle style, float extraSpacing = 5f)
+    {
+        float h = style.CalcHeight(new GUIContent(text), width);
+        GUI.Label(new Rect(x, y, width, h), text, style);
+        y += h + extraSpacing;
     }
 
     private void OnGUI()
@@ -1865,54 +2185,43 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         int oldDepth = GUI.depth;
         GUI.depth = -100;
 
-        float x = 20f;
-        float y = 20f;
-        float w = 650f;
-        float h = 356f;
-        float lineH = 24f;
+        float margin = overlayMargin;
+        float w = overlayWidth;
+        float x = overlayOnRightSide ? (Screen.width - w - margin) : margin;
+        float y = overlayTop;
+        float h = Screen.height - overlayTop - overlayBottomMargin;
 
         Color oldColor = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, 0.94f);
+        GUI.color = new Color(0f, 0f, 0f, 0.88f);
         GUI.DrawTexture(new Rect(x, y, w, h), Texture2D.whiteTexture);
         GUI.color = oldColor;
 
-        float tx = x + 16f;
+        float tx = x + 14f;
         float ty = y + 14f;
+        float innerW = w - 28f;
 
-        GUI.Label(new Rect(tx, ty, 610f, 28f), "Multi-RCM ROSA demo", titleStyle);
-        ty += 34f;
+        DrawOverlayLine(ref ty, tx, innerW, "Multi-RCM ROSA demo", titleStyle, 10f);
 
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "[1] Entry-RCM + tip target    [2] Target-RCM + entry cone    [3] Insertion sequence", labelStyle);
-        ty += lineH;
+        DrawOverlayLine(ref ty, tx, innerW, "[1] Entry-RCM + tip target", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "[2] Target-RCM + entry cone", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "[3] Insertion sequence", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "[4] Entry-RCM + tip cone around target", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "[I] Force insertion   [C] Cone animation", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "[R] Reset   [Space] Pause/resume IK   [H] Overlay", labelStyle, 10f);
 
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "[I] Force insertion    [C] Toggle cone animation    [R] Reset    [Space] Pause    [H] Overlay", labelStyle);
-        ty += lineH + 8f;
+        DrawOverlayLine(ref ty, tx, innerW, "Mode: " + mode + " | Phase: " + insertionPhase, labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Solving: " + (solveIK ? "on" : "off"), labelStyle, 8f);
 
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Current demo: 1=classic trocar RCM, 2=target RCM + cone, 3=full insertion sequence", labelStyle);
-        ty += lineH;
-
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Mode: " + mode + "    Phase: " + insertionPhase + "    Solving: " + (solveIK ? "on" : "off"), labelStyle);
-        ty += lineH;
-
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Entry RCM error: " + entryRCMFormulaErrorMm.ToString("F2") + " mm    lambda: " + entryLambda.ToString("F3"), labelStyle);
-        ty += lineH;
-
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Target RCM/tip error: " + targetRCMFormulaErrorMm.ToString("F2") + " mm    final target tip error: " + finalTargetTipErrorMm.ToString("F2") + " mm", labelStyle);
-        ty += lineH;
-
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Insertion progress: " + insertionProgress.ToString("F2") + "    intermediate target error: " + insertionIntermediateTargetErrorMm.ToString("F2") + " mm", labelStyle);
-        ty += lineH;
-
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Entry -> Target axis error: " + entryTargetAxisErrorDeg.ToString("F2") + " deg", labelStyle);
-        ty += lineH;
-
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Target-RCM cone angle: " + entryConeAngleDeg.ToString("F2") + " deg / " + entryConeHalfAngleDeg.ToString("F1") + " deg    violation: " + entryConeViolationDeg.ToString("F2") + " deg", labelStyle);
-        ty += lineH;
-
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Skull violation: needle " + skullViolationMm.ToString("F2") + " mm, arm " + armSkullViolationMm.ToString("F2") + " mm", labelStyle);
-        ty += lineH;
-
-        GUI.Label(new Rect(tx, ty, 610f, lineH), "Joint limits: " + (jointLimitsOk ? "OK" : "LIMIT HIT") + "    Cone animation: " + (animateTargetConeDemo ? "on" : "off"), labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Entry RCM error: " + entryRCMFormulaErrorMm.ToString("F2") + " mm", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Entry lambda: " + entryLambda.ToString("F3"), labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Target tip error: " + finalTargetTipErrorMm.ToString("F2") + " mm", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Insertion progress: " + insertionProgress.ToString("F2"), labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Intermediate target error: " + insertionIntermediateTargetErrorMm.ToString("F2") + " mm", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Entry -> Target axis error: " + entryTargetAxisErrorDeg.ToString("F2") + " deg", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Cone violation: " + entryConeViolationDeg.ToString("F2") + " deg", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Skull violation: needle " + skullViolationMm.ToString("F2") + " mm, arm " + armSkullViolationMm.ToString("F2") + " mm", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Joint limits: " + (jointLimitsOk ? "OK" : "LIMIT HIT"), labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "Cone animation: " + (animateTargetConeDemo ? "on" : "off"), labelStyle);
 
         GUI.depth = oldDepth;
     }

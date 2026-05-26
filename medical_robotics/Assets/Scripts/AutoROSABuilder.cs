@@ -20,19 +20,36 @@ public class AutoROSABuilder : MonoBehaviour
     public float toolLength = 0.40f;
 
     public float linkRadius = 0.035f;
-    public float jointRadius = 0.055f;
+    public float jointRadius = 0.040f;
     public float toolRadius = 0.008f;
+    public float toolMountOffset = 0.075f;
+    public float distalJointRadiusScale = 0.65f;
 
     [Header("Tool visual")]
     public float realTipLength = 0.035f;
     public float realTipRadius = 0.010f;
 
     [Header("Scene references")]
-    public Vector3 entryPosition = new Vector3(1.05f, 0.78f, 0.02f);
-    public Vector3 targetPosition = new Vector3(1.25f, 0.78f, 0.02f);
+    public Vector3 entryPosition = new Vector3(0.78f, 0.94f, 0.02f);
+    public Vector3 targetPosition = new Vector3(0.83f, 0.80f, 0.02f);
     public float skullRadius = 0.16f;
-    public Vector3 skullCenterOffsetFromEntry = new Vector3(0.105f, 0f, 0f);
-    public Vector3 skullScaleFactors = new Vector3(2.1f, 1.8f, 1.5f);
+    // Top-lateral entry, but the skull center remains around the previous scene height.
+    // The offset puts the entry on the ellipsoid surface and the target inside.
+    public Vector3 skullCenterOffsetFromEntry = new Vector3(0.05f, -0.15f, 0f);
+    public Vector3 skullScaleFactors = new Vector3(1.8f, 2.0f, 1.5f);
+
+    [Header("Needle-skull avoidance")]
+    public bool avoidNeedleFromSkullBeforeInsertion = true;
+    public float needleSkullAvoidanceWeight = 14.0f;
+    public float needleSafetyMargin = 0.02f;
+    public int needleAvoidanceSamples = 16;
+    public float needleInsertionCorridorRadiusMm = 7.0f;
+
+    
+
+    [Header("Robot placement")]
+    [Tooltip("Move only the generated robot base/arm. Entry, target and skull are kept at their world positions when created.")]
+    public Vector3 robotBaseOffset = new Vector3(-0.05f, 0f, -0.28f);
 
     [Header("Controller")]
     public bool addController = true;
@@ -63,7 +80,9 @@ public class AutoROSABuilder : MonoBehaviour
 
         GameObject root = new GameObject(generatedRootName);
         root.transform.SetParent(transform, false);
-        root.transform.localPosition = Vector3.zero;
+        // Shift the robot base/arm slightly to the left/back relative to the patient.
+        // The patient objects are later created with world positions, so they stay fixed.
+        root.transform.localPosition = robotBaseOffset;
         root.transform.localRotation = Quaternion.identity;
         root.transform.localScale = Vector3.one;
 
@@ -91,12 +110,22 @@ public class AutoROSABuilder : MonoBehaviour
         CreateLocalHorizontalXLink("Wrist_Link_B", j4, wristB, linkRadius * 0.75f, grayMat);
         Transform j5 = CreateJointPivot("Joint_5_ToolAxis", j4, new Vector3(wristB, 0f, 0f));
 
+        // Small distal support so the needle does not start inside the blue joint sphere.
+        CreateLocalHorizontalXLink(
+            "Distal_Tool_Mount_Link",
+            j5,
+            toolMountOffset,
+            linkRadius * 0.45f,
+            darkMat
+        );
+
         GameObject toolFrameObj = new GameObject("ToolFrame");
         toolFrameObj.transform.SetParent(j5, false);
-        toolFrameObj.transform.localPosition = Vector3.zero;
+
+        // Move the needle base outside the last blue joint.
+        toolFrameObj.transform.localPosition = new Vector3(toolMountOffset, 0f, 0f);
         toolFrameObj.transform.localRotation = Quaternion.Euler(0f, 90f, 0f);
         toolFrameObj.transform.localScale = Vector3.one;
-
         CreateNeedleVisual(toolFrameObj.transform);
 
         GameObject toolTipObj = new GameObject("ToolTip");
@@ -179,23 +208,23 @@ public class AutoROSABuilder : MonoBehaviour
         controller.useInsertionSequence = true;
         controller.insertionPhase = DoubleRCMUnityController2.InsertionPhase.ApproachEntry;
 
-        controller.entryReachedThresholdMm = 15.0f;
+        controller.entryReachedThresholdMm = 18.0f;
         controller.targetReachedThresholdMm = 8.0f;
 
-        controller.entryApproachTipWeight = 2.6f;
-        controller.preAlignEntryAxisWeight = 0.45f;
-        controller.insertionEntryWeight = 4.2f;
-        controller.insertionTargetWeight = 2.8f;
-        controller.insertionAxisWeight = 1.0f;
+        controller.entryApproachTipWeight = 6.5f;
+        controller.preAlignEntryAxisWeight = 0.15f;
+        controller.insertionEntryWeight = 5.5f;
+        controller.insertionTargetWeight = 5.0f;
+        controller.insertionAxisWeight = 2.5f;
         controller.useProgressiveStraightInsertion = true;
-        controller.insertionProgressSpeed = 0.35f;
-        controller.insertionProgressAdvanceErrorMm = 10.0f;
+        controller.insertionProgressSpeed = 0.07f;
+        controller.insertionProgressAdvanceErrorMm = 18.0f;
 
-        controller.solverIterations = 4;
-        controller.damping = 0.18f;
+        controller.solverIterations = 6;
+        controller.damping = 0.22f;
         controller.finiteDifferenceDeg = 0.5f;
-        controller.maxDeltaDegPerIteration = 0.22f;
-        controller.ikStepScale = 0.16f;
+        controller.maxDeltaDegPerIteration = 0.20f;
+        controller.ikStepScale = 0.15f;
 
         controller.entryWeight = 3.4f;
         controller.targetTipWeight = 2.6f;
@@ -206,17 +235,24 @@ public class AutoROSABuilder : MonoBehaviour
         controller.entryConeFrequencyHz = 0.15f;
         controller.targetModeTargetRCMWeight = 4.2f;
         controller.targetModeEntryConeWeight = 1.4f;
-        controller.skullAvoidanceWeight = 0.45f;
+        controller.skullAvoidanceWeight = 2f;
         controller.useFiniteNeedleSegmentForEntry = true;
+
+        controller.avoidNeedleFromSkullBeforeInsertion = avoidNeedleFromSkullBeforeInsertion;
+        controller.needleSkullAvoidanceWeight = needleSkullAvoidanceWeight;
+        controller.needleSafetyMargin = needleSafetyMargin;
+        controller.needleAvoidanceSamples = needleAvoidanceSamples;
+        controller.needleInsertionCorridorRadiusMm = needleInsertionCorridorRadiusMm;
+
 
         // Link-based RCM formula:
         // p_RCM = p_i + lambda * (p_{i+1} - p_i)
         // -1 selects the surgical tool segment ToolFrame -> ToolTip.
         controller.useLinkBasedRCMFormula = true;
         controller.entryRCMSegmentIndex = -1;
-        controller.entryLambda = 0.5f;
-        controller.optimizeEntryLambda = true;
-        controller.initializeLambdaFromClosestPoint = true;
+        controller.entryLambda = 1.0f;
+        controller.optimizeEntryLambda = false;
+        controller.initializeLambdaFromClosestPoint = false;
 
         // The target is represented by the same formula with lambda = 1,
         // which makes p_RCM coincide with the physical tool tip.
@@ -249,22 +285,26 @@ public class AutoROSABuilder : MonoBehaviour
         };
 
         controller.avoidArmLinksFromSkull = true;
-        controller.armSkullAvoidanceWeight = 5.0f;
-        controller.armSafetyMargin = 0.07f;
+        controller.armSkullAvoidanceWeight = 40.0f;
+        controller.armSafetyMargin = 0.2f;
         controller.armAvoidanceSamplesPerSegment = 4;
 
+
         controller.showOverlay = true;
+        controller.logToCsv = false;
+        controller.overlayOnRightSide = true;
+        controller.overlayWidth = 380f;
 
         controller.useDemoStartPose = useDemoStartPose;
         controller.demoWaitBeforeSolving = 0.5f;
         controller.demoJointAnglesDeg = new float[]
         {
-            18f,
-            -16f,
-            22f,
-            -12f,
-            14f,
-            8f
+            0f,
+            0f,
+            0f,
+            0f,
+            0f,
+            0f
         };
     }
 
@@ -462,8 +502,8 @@ public class AutoROSABuilder : MonoBehaviour
             GameObject cameraObj = new GameObject("Main Camera");
             Camera camera = cameraObj.AddComponent<Camera>();
             camera.tag = "MainCamera";
-            cameraObj.transform.position = new Vector3(1.4f, 1.0f, -1.5f);
-            cameraObj.transform.rotation = Quaternion.Euler(28f, -38f, 0f);
+            cameraObj.transform.position = new Vector3(1.25f, 1.05f, -1.55f);
+            cameraObj.transform.rotation = Quaternion.Euler(26f, -34f, 0f);
         }
     }
 }
