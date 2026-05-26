@@ -39,7 +39,7 @@ The robot is **not an exact CAD reconstruction of the commercial ROSA robot**. I
 
 The following video shows the current Unity demo, including the ROSA-inspired robot, the skull entry point, the internal target, the insertion sequence, and the RCM/skull-avoidance overlay.
 
-[▶ Watch Movie_002.mp4](Recordings/Movie_002.mp4)
+[▶ Watch Movie_002.mp4](medical_robotics/Recordings/Movie_002.mp4)
 ---
 
 ## Main Files
