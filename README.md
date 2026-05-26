@@ -35,6 +35,12 @@ The implemented Unity scene contains:
 The robot is **not an exact CAD reconstruction of the commercial ROSA robot**. It is a **ROSA-inspired kinematic model**, built with Unity primitives, designed to reproduce the functional elements required by the assignment.
 
 ---
+## Demo Video
+
+The following video shows the current Unity demo, including the ROSA-inspired robot, the skull entry point, the internal target, the insertion sequence, and the RCM/skull-avoidance overlay.
+
+[▶ Watch Movie_002.mp4](Recordings/Movie_002.mp4)
+---
 
 ## Main Files
 
