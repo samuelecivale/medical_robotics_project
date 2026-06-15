@@ -19,7 +19,6 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     public enum InsertionPhase
     {
         ApproachEntry,
-        AlignAtEntry,
         InsertToTarget,
         Done
     }
@@ -53,31 +52,6 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     public InsertionPhase insertionPhase = InsertionPhase.ApproachEntry;
     public float entryReachedThresholdMm = 15.0f;
     public float targetReachedThresholdMm = 8.0f;
-
-    [Header("Insertion staging / alignment gates")]
-    [Tooltip("Distance outside the skull used before touching the entry point. The tip first reaches Entry - dir(Entry->Target)*distance.")]
-    public float preEntryDistanceMm = 85.0f;
-
-    [Tooltip("Phase change ApproachEntry -> AlignAtEntry when the tip is close to the pre-entry point.")]
-    public float preEntryReachedThresholdMm = 12.0f;
-
-    [Tooltip("The sequence may start insertion only if the tool axis is aligned with Entry -> Target below this angle.")]
-    public float insertionStartAxisThresholdDeg = 7.0f;
-
-    [Tooltip("The sequence may start insertion only if the entry point lies close to the tool axis.")]
-    public float insertionStartAxisDistanceThresholdMm = 6.0f;
-
-    [Tooltip("Extra gain used in the AlignAtEntry phase before insertion.")]
-    public float alignAtEntryAxisWeight = 3.0f;
-
-    [Tooltip("Extra gain used to keep the tip on the entry point during the AlignAtEntry phase.")]
-    public float alignAtEntryTipWeight = 3.5f;
-
-    [Tooltip("If true, phase transitions are blocked until the shaft is compatible with the Entry->Target insertion line.")]
-    public bool requireAlignedPoseBeforeInsertion = true;
-
-    [Tooltip("If true, the overlay and console report why the insertion phase has not started yet.")]
-    public bool showInsertionGateDebug = true;
 
     [Tooltip("Phase 1: drives the real tip to the red entry point.")]
     public float entryApproachTipWeight = 2.6f;
@@ -281,9 +255,6 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     public int activeTargetRCMSegmentIndex;
     public float finalTargetTipErrorMm;
     public float insertionIntermediateTargetErrorMm;
-    public float preEntryTipErrorMm;
-    public bool insertionStartGateOk;
-    public string insertionGateStatus = "";
     public float entryTargetAxisErrorDeg;
     public float entryConeAngleDeg;
     public float entryConeViolationDeg;
@@ -298,10 +269,11 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     private Quaternion[] initialRotations;
     private StreamWriter logWriter;
     private float lastLogTime;
+    private int logSampleCount = 0;
+    private string activeLogPath = "";
 
     private float demoStartTime;
     private bool demoPoseApplied = false;
-    private bool waitingForDemoStart = false;
     private bool rcmParametersInitialized = false;
 
     private GUIStyle labelStyle;
@@ -357,7 +329,6 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         {
             ApplyDemoStartPose();
             solveIK = false;
-            waitingForDemoStart = true;
             demoStartTime = Time.time;
         }
 
@@ -369,13 +340,10 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         HandleInput();
         EnsureAutoToolTip();
 
-        if (useDemoStartPose && demoPoseApplied && waitingForDemoStart && !solveIK)
+        if (useDemoStartPose && demoPoseApplied && !solveIK)
         {
             if (Time.time - demoStartTime >= demoWaitBeforeSolving)
-            {
                 solveIK = true;
-                waitingForDemoStart = false;
-            }
         }
 
         if (!ReferencesAreValid())
@@ -415,9 +383,6 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         targetRCMFormulaErrorMm = targetError.magnitude * 1000f;
         finalTargetTipErrorMm = Vector3.Distance(GetToolTipPosition(), targetPoint.position) * 1000f;
         insertionIntermediateTargetErrorMm = Vector3.Distance(GetToolTipPosition(), GetCurrentInsertionTargetPoint()) * 1000f;
-        preEntryTipErrorMm = Vector3.Distance(GetToolTipPosition(), GetPreEntryPoint()) * 1000f;
-        insertionStartGateOk = IsInsertionStartPoseReady();
-        insertionGateStatus = GetInsertionGateStatus();
         entryTargetAxisErrorDeg = GetEntryTargetAxisAngleDeg();
         UpdateEntryConeDebugValues();
         jointLimitsOk = AreJointLimitsSatisfied();
@@ -432,40 +397,18 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         InsertionPhase oldPhase = insertionPhase;
 
-        if (insertionPhase == InsertionPhase.ApproachEntry)
+        if (insertionPhase == InsertionPhase.ApproachEntry && tipEntryErrorMm <= entryReachedThresholdMm)
         {
-            // First reach a point just outside the skull along the opposite direction of insertion.
-            // This avoids touching the entry point from a lateral, non-insertable posture.
-            if (preEntryTipErrorMm <= preEntryReachedThresholdMm)
-                insertionPhase = InsertionPhase.AlignAtEntry;
+            insertionPhase = InsertionPhase.InsertToTarget;
+            insertionProgress = 0f;
         }
-        else if (insertionPhase == InsertionPhase.AlignAtEntry)
-        {
-            // The tip may touch the entry only when the shaft is already compatible with Entry -> Target.
-            // Without this gate the controller can switch to insertion from a sideways pose and then fail.
-            bool tipAtEntry = tipEntryErrorMm <= entryReachedThresholdMm;
-            bool gateOk = !requireAlignedPoseBeforeInsertion || IsInsertionStartPoseReady();
 
-            if (tipAtEntry && gateOk)
-            {
-                insertionPhase = InsertionPhase.InsertToTarget;
-                insertionProgress = 0f;
-            }
-        }
-        else if (insertionPhase == InsertionPhase.InsertToTarget)
-        {
-            bool progressDone = !useProgressiveStraightInsertion || insertionProgress >= 0.999f;
-
-            if (progressDone && finalTargetTipErrorMm <= targetReachedThresholdMm)
-                insertionPhase = InsertionPhase.Done;
-        }
+        if (insertionPhase == InsertionPhase.InsertToTarget && insertionProgress >= 0.999f && finalTargetTipErrorMm <= targetReachedThresholdMm)
+            insertionPhase = InsertionPhase.Done;
 
         if (oldPhase != insertionPhase)
         {
             rcmParametersInitialized = false;
-
-            if (showInsertionGateDebug)
-                Debug.Log("[DoubleRCM] Insertion phase: " + oldPhase + " -> " + insertionPhase + " | " + GetInsertionGateStatus());
 
             if (insertionPhase == InsertionPhase.InsertToTarget)
                 InitializeRCMParametersFromClosestPoints();
@@ -477,7 +420,7 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (!useInsertionSequence)
             return;
 
-        if (insertionPhase == InsertionPhase.ApproachEntry || insertionPhase == InsertionPhase.AlignAtEntry)
+        if (insertionPhase == InsertionPhase.ApproachEntry)
         {
             insertionProgress = 0f;
             return;
@@ -638,7 +581,11 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         if (GetKeyDownCompat(KeyCode.I))
         {
-            Debug.Log("[DoubleRCM] Force insertion is disabled. Press [3] to run: pre-entry -> align-at-entry -> insertion.");
+            mode = RCMMode.Double;
+            useInsertionSequence = true;
+            insertionPhase = InsertionPhase.InsertToTarget;
+            insertionProgress = Mathf.Max(0f, insertionProgress);
+            rcmParametersInitialized = false;
         }
 
         if (GetKeyDownCompat(KeyCode.C))
@@ -655,16 +602,12 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             {
                 ApplyDemoStartPose();
                 solveIK = false;
-                waitingForDemoStart = true;
                 demoStartTime = Time.time;
             }
         }
 
         if (GetKeyDownCompat(KeyCode.Space))
-        {
-            waitingForDemoStart = false;
             solveIK = !solveIK;
-        }
     }
 
     private void StoreInitialPose()
@@ -706,7 +649,6 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         rcmParametersInitialized = false;
         demoPoseApplied = false;
-        waitingForDemoStart = false;
         overlaySnapshotInitialized = false;
     }
 
@@ -834,26 +776,14 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         if (insertionPhase == InsertionPhase.ApproachEntry)
         {
-            // Phase 0: stop just outside the entry point and already aim the shaft toward the target.
-            // This is the missing condition that prevents a lateral contact with the trocar.
-            Vector3 preEntry = GetPreEntryPoint();
-            errors.Add(entryApproachTipWeight * TipToPointErrorVector(preEntry));
-            errors.Add(preAlignEntryAxisWeight * 2.2f * EntryTargetAxisAlignmentErrorVector());
+            // Phase 1: physical needle tip goes to the red entry point.
+            errors.Add(entryApproachTipWeight * TipToPointErrorVector(entryPoint.position));
+
+            // Weak pre-alignment. This helps the next insertion phase by aligning the shaft with Entry -> Target.
             errors.Add(preAlignEntryAxisWeight * PointToInfiniteToolAxisErrorVector(entryPoint.position));
+            errors.Add(preAlignEntryAxisWeight * EntryTargetAxisAlignmentErrorVector());
 
             // During approach, only keep the arm outside the skull.
-            AddArmSkullAvoidanceErrors(errors);
-            return errors.ToArray();
-        }
-
-        if (insertionPhase == InsertionPhase.AlignAtEntry)
-        {
-            // Phase 1: touch the trocar entry only after the shaft is aligned with the planned entry-target line.
-            errors.Add(alignAtEntryTipWeight * TipToPointErrorVector(entryPoint.position));
-            errors.Add(alignAtEntryAxisWeight * EntryTargetAxisAlignmentErrorVector());
-            errors.Add(alignAtEntryAxisWeight * PointToInfiniteToolAxisErrorVector(entryPoint.position));
-
-            // Keep the real arm outside the skull while aligning.
             AddArmSkullAvoidanceErrors(errors);
             return errors.ToArray();
         }
@@ -861,14 +791,19 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (insertionPhase == InsertionPhase.InsertToTarget)
         {
             // Phase 2: entry becomes the trocar RCM point on the selected link,
-            // while the physical tip advances along the Entry -> Target segment.
+            // while the target task is represented with the same RCM formula
+            // using targetLambda = 1 by default, i.e. the physical tip.
             Vector3 insertionTarget = GetCurrentInsertionTargetPoint();
 
             errors.Add(insertionEntryWeight * GetEntryErrorVector(entryPoint.position));
+
+            // During insertion the physical tip must advance along the Entry -> Target line.
+            // Do not constrain the target through another free RCM point here.
             errors.Add(insertionTargetWeight * TipToPointErrorVector(insertionTarget));
+
             errors.Add(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
 
-            // The needle is allowed to enter only through the surgical corridor; arm links stay outside.
+            // The needle is allowed to enter; only the arm links avoid the skull.
             AddArmSkullAvoidanceErrors(errors);
             return errors.ToArray();
         }
@@ -1104,62 +1039,6 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             return RCMPointErrorVector(point, targetRCMSegmentIndex, targetLambda);
 
         return TipToPointErrorVector(point);
-    }
-
-    private Vector3 GetInsertionDirection()
-    {
-        if (entryPoint == null || targetPoint == null)
-            return toolFrame != null ? GetToolDirection() : Vector3.forward;
-
-        Vector3 axis = targetPoint.position - entryPoint.position;
-
-        if (axis.sqrMagnitude < 1e-8f)
-            return toolFrame != null ? GetToolDirection() : Vector3.forward;
-
-        return axis.normalized;
-    }
-
-    private Vector3 GetPreEntryPoint()
-    {
-        if (entryPoint == null)
-            return Vector3.zero;
-
-        Vector3 dir = GetInsertionDirection();
-        float distance = Mathf.Max(0f, preEntryDistanceMm) * 0.001f;
-        return entryPoint.position - dir * distance;
-    }
-
-    private bool IsInsertionStartPoseReady()
-    {
-        if (entryPoint == null || targetPoint == null || toolFrame == null)
-            return false;
-
-        bool axisOk = entryTargetAxisErrorDeg <= insertionStartAxisThresholdDeg;
-        bool entryOnAxisOk = entryAxisErrorMm <= insertionStartAxisDistanceThresholdMm;
-        bool tipOk = tipEntryErrorMm <= entryReachedThresholdMm;
-
-        return axisOk && entryOnAxisOk && tipOk;
-    }
-
-    private string GetInsertionGateStatus()
-    {
-        if (!useInsertionSequence)
-            return "sequence disabled";
-
-        if (insertionPhase == InsertionPhase.ApproachEntry)
-            return "pre-entry err=" + preEntryTipErrorMm.ToString("F1") + " mm / " + preEntryReachedThresholdMm.ToString("F1") + " mm";
-
-        if (insertionPhase == InsertionPhase.AlignAtEntry)
-        {
-            return "tip-entry=" + tipEntryErrorMm.ToString("F1") + " mm, axis=" + entryTargetAxisErrorDeg.ToString("F1") +
-                   " deg, entry-axis=" + entryAxisErrorMm.ToString("F1") + " mm, gate=" +
-                   (IsInsertionStartPoseReady() ? "OK" : "WAIT");
-        }
-
-        if (insertionPhase == InsertionPhase.InsertToTarget)
-            return "target err=" + finalTargetTipErrorMm.ToString("F1") + " mm, RCM=" + entryRCMFormulaErrorMm.ToString("F1") + " mm";
-
-        return "done";
     }
 
     private Vector3 GetCurrentInsertionTargetPoint()
@@ -2232,8 +2111,13 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         try
         {
+            lastLogTime = -9999f;
+            logSampleCount = 0;
+            activeLogPath = path;
+
             FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
             logWriter = new StreamWriter(stream);
+            logWriter.AutoFlush = true;
             logWriter.WriteLine(
                 "time,phase,mode,tip_entry_error_mm,entry_rcm_error_mm,entry_axis_error_deg,target_rcm_or_tip_error_mm,final_target_tip_error_mm,insertion_progress,insertion_intermediate_error_mm,entry_cone_angle_deg,entry_cone_violation_deg,skull_violation_mm,arm_skull_violation_mm,entry_lambda,target_lambda,entry_segment,target_segment,joint_limits_ok," +
                 "tool_x,tool_y,tool_z,tip_x,tip_y,tip_z," +
@@ -2241,7 +2125,8 @@ public class DoubleRCMUnityController2 : MonoBehaviour
                 "q0_deg,q1_deg,q2_deg,q3_deg,q4_deg,q5_deg"
             );
 
-            Debug.Log("RCM CSV log saved to: " + path);
+            logWriter.Flush();
+            Debug.Log("RCM CSV logging started at: " + path);
         }
         catch (IOException ex)
         {
@@ -2253,8 +2138,16 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
     private void LogSample()
     {
-        if (!logToCsv || logWriter == null)
+        if (!logToCsv)
             return;
+
+        if (logWriter == null)
+        {
+            StartLogging();
+
+            if (logWriter == null)
+                return;
+        }
 
         if (Time.time - lastLogTime < logEverySeconds)
             return;
@@ -2305,6 +2198,12 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             JointAngleCsv(4) + "," +
             JointAngleCsv(5)
         );
+
+        logSampleCount++;
+
+        // Keep the CSV readable even before Unity closes Play Mode.
+        // This also prevents apparently-empty logs if the editor stops abruptly.
+        logWriter.Flush();
     }
 
     private string JointAngleCsv(int index)
@@ -2327,6 +2226,9 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             logWriter.Flush();
             logWriter.Close();
             logWriter = null;
+
+            if (!string.IsNullOrEmpty(activeLogPath))
+                Debug.Log("RCM CSV logging closed. Samples written: " + logSampleCount + " | file: " + activeLogPath);
         }
     }
 
@@ -2432,14 +2334,14 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         DrawOverlayLine(ref ty, tx, innerW, "Multi-RCM ROSA demo", titleStyle, 10f);
 
+        DrawOverlayLine(ref ty, tx, innerW, "[1] Entry-RCM + tip target", labelStyle);
         DrawOverlayLine(ref ty, tx, innerW, "[2] Target-RCM + entry cone", labelStyle);
-        DrawOverlayLine(ref ty, tx, innerW, "[3] Pre-entry -> align-at-entry -> insertion", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "[3] Insertion sequence", labelStyle);
         DrawOverlayLine(ref ty, tx, innerW, "[4] Entry-RCM + tip cone around target", labelStyle);
-        DrawOverlayLine(ref ty, tx, innerW, "[I] Force insertion disabled   [C] Cone animation", labelStyle);
+        DrawOverlayLine(ref ty, tx, innerW, "[I] Force insertion   [C] Cone animation", labelStyle);
         DrawOverlayLine(ref ty, tx, innerW, "[R] Reset   [Space] Pause/resume IK   [H] Overlay", labelStyle, 10f);
 
         DrawOverlayLine(ref ty, tx, innerW, "Mode: " + mode + " | Phase: " + insertionPhase, labelStyle);
-        DrawOverlayLine(ref ty, tx, innerW, "Gate: " + insertionGateStatus, labelStyle);
         DrawOverlayLine(ref ty, tx, innerW, "Solving: " + (solveIK ? "on" : "off"), labelStyle, 8f);
 
         DrawOverlayLine(ref ty, tx, innerW, "Entry RCM error: " + shownEntryRCMErrorMm.ToString("F2") + " mm", labelStyle);
@@ -2509,10 +2411,6 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (entryPoint != null && targetPoint != null)
         {
             Vector3 insertionTarget = GetCurrentInsertionTargetPoint();
-            Vector3 preEntry = GetPreEntryPoint();
-            Gizmos.color = Color.magenta;
-            Gizmos.DrawSphere(preEntry, 0.010f);
-            Gizmos.DrawLine(preEntry, entryPoint.position);
             Gizmos.color = Color.yellow;
             Gizmos.DrawSphere(insertionTarget, 0.010f);
             Gizmos.DrawLine(entryPoint.position, targetPoint.position);
