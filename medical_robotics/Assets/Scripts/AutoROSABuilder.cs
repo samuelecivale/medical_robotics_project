@@ -392,10 +392,21 @@ public class AutoROSABuilder : MonoBehaviour
         controller.insertionPhase = DoubleRCMUnityController2.InsertionPhase.ApproachEntry;
         controller.insertionProgress = 0f;
         controller.useProgressiveStraightInsertion = true;
-        controller.insertionProgressSpeed = 0.18f;
-        controller.insertionProgressAdvanceErrorMm = 12.0f;
-        controller.entryReachedThresholdMm = 10.0f;
+        controller.insertionProgressSpeed = 0.14f;
+        controller.insertionProgressAdvanceErrorMm = 10.0f;
+        controller.entryReachedThresholdMm = 8.0f;
         controller.targetReachedThresholdMm = 6.0f;
+
+        // The insertion sequence must not switch phase just because the tip touches the entry.
+        // It first goes to a pre-entry point, then aligns the shaft with Entry->Target, then inserts.
+        controller.preEntryDistanceMm = 85.0f;
+        controller.preEntryReachedThresholdMm = 12.0f;
+        controller.insertionStartAxisThresholdDeg = 7.0f;
+        controller.insertionStartAxisDistanceThresholdMm = 6.0f;
+        controller.alignAtEntryTipWeight = 4.0f;
+        controller.alignAtEntryAxisWeight = 3.8f;
+        controller.requireAlignedPoseBeforeInsertion = true;
+        controller.showInsertionGateDebug = true;
 
         // Paper-style link RCM variables. Segment -1 means ToolFrame -> ToolTip.
         controller.useLinkBasedRCMFormula = true;
@@ -421,11 +432,11 @@ public class AutoROSABuilder : MonoBehaviour
         controller.maxDeltaDegPerIteration = 0.42f;
 
         // Task gains. These prioritize the hard RCM before the decorative cone motions.
-        controller.entryApproachTipWeight = 3.8f;
-        controller.preAlignEntryAxisWeight = 0.45f;
-        controller.insertionEntryWeight = 5.2f;
-        controller.insertionTargetWeight = 3.1f;
-        controller.insertionAxisWeight = 1.15f;
+        controller.entryApproachTipWeight = 3.4f;
+        controller.preAlignEntryAxisWeight = 1.15f;
+        controller.insertionEntryWeight = 5.4f;
+        controller.insertionTargetWeight = 3.0f;
+        controller.insertionAxisWeight = 1.4f;
 
         controller.entryWeight = 5.0f;
         controller.targetTipWeight = 3.0f;
@@ -474,10 +485,10 @@ public class AutoROSABuilder : MonoBehaviour
         controller.overlayRefreshSeconds = 0.10f;
         controller.overlaySmoothing = 0.35f;
 
-        controller.logToCsv = true;
+        controller.logToCsv = false;
         controller.logFileName = "double_rcm_log.csv";
         controller.useTimestampedLogFile = true;
-        controller.logEverySeconds = 0.02f;
+        controller.logEverySeconds = 0.03f;
 
         controller.useDemoStartPose = useDemoStartPose;
         controller.demoWaitBeforeSolving = 0.35f;
