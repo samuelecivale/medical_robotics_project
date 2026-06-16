@@ -1,10 +1,10 @@
-# Project 4 — Multi-RCM Control for a ROSA-like Neurosurgical Robot in Unity
+# Multi-RCM Control for a ROSA-like Neurosurgical Robot in Unity
 
 ## Overview
 
 This repository contains a Unity implementation of a simplified ROSA-like robotic system for neurosurgical Remote Center of Motion (RCM) control.
 
-The project addresses **Project 4 — Multi-RCM for the ROSA robot**. The goal is to build a 3D and kinematic model of a ROSA-inspired manipulator and implement a double-RCM kinematic controller for neurosurgical procedures.
+The project addresses **Multi-RCM for the ROSA robot**. The goal is to build a 3D and kinematic model of a ROSA-inspired manipulator and implement a double-RCM kinematic controller for neurosurgical procedures.
 
 The surgical scenario is based on:
 
