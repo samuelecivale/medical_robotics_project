@@ -126,6 +126,13 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     public float armSafetyMargin = 0.08f;
     public int armAvoidanceSamplesPerSegment = 4;
 
+    [Header("Hard skull safety")]
+    [Tooltip("Rejects/backtracks IK steps that would create any real skull collision.")]
+    public bool enforceZeroSkullViolation = true;
+    public float hardSkullSafetyMargin = 0.0f;
+    public int hardSafetyBacktrackingSteps = 12;
+    public float hardSafetyToleranceMm = 0.0f;
+
     [Header("Plane fallback if no skull collider")]
     public bool usePlaneFallbackWhenNoCollider = true;
     public Transform skullPlaneNormalReference;
@@ -178,6 +185,28 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
     [Range(0.01f, 1f)]
     public float ikStepScale = 0.12f;
+
+    [Header("Task 3 phase speed limits")]
+    [Tooltip("Slows only the real insertion sequence phases. It does not affect Task 2 or Task 4 cone demos.")]
+    public bool useInsertionPhaseSpeedLimits = true;
+
+    [Range(0.05f, 1.0f)]
+    public float approachEntryStepScale = 0.45f;
+
+    [Range(0.05f, 1.0f)]
+    public float alignAtEntryStepScale = 0.38f;
+
+    [Range(0.05f, 1.0f)]
+    public float insertToTargetStepScale = 1.0f;
+
+    [Tooltip("Extra joint-step cap during ApproachEntry. Use <= 0 to disable this phase-specific cap.")]
+    public float approachEntryMaxDeltaDegPerIteration = 0.75f;
+
+    [Tooltip("Extra joint-step cap while touching/aliging at the entry. Use <= 0 to disable this phase-specific cap.")]
+    public float alignAtEntryMaxDeltaDegPerIteration = 0.65f;
+
+    [Tooltip("Extra joint-step cap during real insertion. Use <= 0 to keep the global cap.")]
+    public float insertToTargetMaxDeltaDegPerIteration = -1.0f;
 
     [Header("Entry constraint fallback")]
     [Tooltip("Fallback geometric constraint used only if the link-based RCM formula is disabled.")]
@@ -310,6 +339,18 @@ public class DoubleRCMUnityController2 : MonoBehaviour
     private static DoubleRCMUnityController2 overlayOwner;
     private bool ownsOverlay = false;
 
+    private Vector3 _skullCenter;
+    private Vector3 _skullRadiiArm;
+    private Vector3 _skullRadiiNeedle;
+    private bool _skullCacheDirty = true;
+
+    private Vector3[] _errorBuf = new Vector3[128];
+    private int _errorBufCount;
+    private float[] _eBuf = new float[384];
+    private float[,] _jacBuf;
+    private float[] _dxBuf = new float[16];
+    private float[] _origAngles = new float[8];
+
     private bool overlaySnapshotInitialized = false;
     private float nextOverlayRefreshTime = 0f;
     private float shownEntryRCMErrorMm;
@@ -361,6 +402,12 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             demoStartTime = Time.time;
         }
 
+        // Force the runtime overlay to be visible on the active generated controller.
+        // This avoids losing the overlay when old/disabled controller instances existed in the scene.
+        showOverlay = true;
+        overlaySnapshotInitialized = false;
+        ClaimOverlayOwnership();
+
         StartLogging();
     }
 
@@ -381,16 +428,18 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (!ReferencesAreValid())
             return;
 
-        UpdateDebugValues();
+        UpdateInsertionPhaseValues();
         UpdateInsertionPhase();
         UpdateInsertionProgress();
 
         if (solveIK)
         {
+            _skullCacheDirty = true;
             for (int i = 0; i < solverIterations; i++)
                 SolveOneIKStep();
         }
 
+        _skullCacheDirty = true;
         UpdateDebugValues();
         UpdateOverlaySnapshot();
         LogSample();
@@ -423,6 +472,17 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         jointLimitsOk = AreJointLimitsSatisfied();
         activeEntryRCMSegmentIndex = ResolveRCMSegmentIndex(entryRCMSegmentIndex);
         activeTargetRCMSegmentIndex = ResolveRCMSegmentIndex(targetRCMSegmentIndex);
+    }
+
+    private void UpdateInsertionPhaseValues()
+    {
+        if (!useInsertionSequence) return;
+        Vector3 tip = GetToolTipPosition();
+        preEntryTipErrorMm = Vector3.Distance(tip, GetPreEntryPoint()) * 1000f;
+        tipEntryErrorMm    = entryPoint != null ? Vector3.Distance(tip, entryPoint.position) * 1000f : 0f;
+        finalTargetTipErrorMm = targetPoint != null ? Vector3.Distance(tip, targetPoint.position) * 1000f : 0f;
+        entryTargetAxisErrorDeg = GetEntryTargetAxisAngleDeg();
+        entryAxisErrorMm = PointToInfiniteToolAxisDistance(entryPoint != null ? entryPoint.position : Vector3.zero) * 1000f;
     }
 
     private void UpdateInsertionPhase()
@@ -749,27 +809,31 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (useInsertionSequence && insertionPhase == InsertionPhase.InsertToTarget)
             UpdateEntryLambdaFromInsertionDepth();
 
-        Vector3[] errorVectors = GetCurrentErrorVectors();
-
-        int m = errorVectors.Length * 3;
+        FillErrorBuffer();
+        int errorCount = _errorBufCount;
+        int m = errorCount * 3;
         int variableCount = GetActiveVariableCount();
 
         if (m <= 0 || variableCount <= 0)
             return;
 
-        float[] e = new float[m];
-
-        for (int i = 0; i < errorVectors.Length; i++)
+        if (_eBuf.Length < m) _eBuf = new float[m + 32];
+        for (int i = 0; i < errorCount; i++)
         {
-            e[i * 3 + 0] = errorVectors[i].x;
-            e[i * 3 + 1] = errorVectors[i].y;
-            e[i * 3 + 2] = errorVectors[i].z;
+            _eBuf[i * 3]     = _errorBuf[i].x;
+            _eBuf[i * 3 + 1] = _errorBuf[i].y;
+            _eBuf[i * 3 + 2] = _errorBuf[i].z;
         }
 
-        float[,] J = ComputeNumericalJacobian(e, m, variableCount);
-        float[] dx = SolveDampedLeastSquares(J, e, m, variableCount);
+        if (_jacBuf == null || _jacBuf.GetLength(0) < m || _jacBuf.GetLength(1) < variableCount)
+            _jacBuf = new float[m + 32, variableCount + 4];
 
-        ApplySolutionStep(dx);
+        ComputeNumericalJacobianInto(_eBuf, m, variableCount, _jacBuf);
+
+        if (_dxBuf.Length < variableCount) _dxBuf = new float[variableCount + 4];
+        SolveDampedLeastSquaresInto(_jacBuf, _eBuf, m, variableCount, _dxBuf);
+
+        ApplySolutionStep(_dxBuf);
     }
 
     private void UpdateEntryLambdaFromInsertionDepth()
@@ -786,46 +850,148 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         entryLambda = Mathf.Clamp01(1.0f - insertionDepth / safeToolLength);
     }
 
-    private Vector3[] GetCurrentErrorVectors()
+    private void FillErrorBuffer()
     {
-        if (useInsertionSequence)
-            return GetInsertionSequenceErrorVectors();
+        _errorBufCount = 0;
+        if (useInsertionSequence) { FillInsertionSequenceErrors(); return; }
 
         if (mode == RCMMode.Entry)
         {
-            List<Vector3> entryErrors = new List<Vector3>();
-            entryErrors.Add(entryWeight * GetEntryErrorVector(entryPoint.position));
-            entryErrors.Add(targetTipWeight * GetTargetTaskErrorVector(targetPoint.position));
-            entryErrors.Add(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
-            AddSkullAvoidanceErrors(entryErrors);
-            return entryErrors.ToArray();
+            EBuf(entryWeight * GetEntryErrorVector(entryPoint.position));
+            EBuf(targetTipWeight * GetTargetTaskErrorVector(targetPoint.position));
+            EBuf(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
+            AddSkullAvoidanceErrorsBuf();
+            return;
         }
-
         if (mode == RCMMode.EntryTipCone)
         {
-            return GetEntryRCMWithTipConeAroundTargetErrorVectors();
+            EBuf(entryTipConeRCMWeight * GetEntryErrorVector(entryPoint.position));
+            Vector3 desiredTip = GetTipConePointAroundTarget();
+            EBuf(entryTipConeTipWeight * TipToPointErrorVector(desiredTip));
+            EBuf(entryTipConeAxisWeight * EntryTipConeAxisErrorVector(desiredTip));
+            AddArmSkullAvoidanceErrorsBuf();
+            return;
         }
-
         if (mode == RCMMode.Target)
         {
-            List<Vector3> targetErrors = new List<Vector3>();
-            targetErrors.Add(targetModeTargetRCMWeight * GetTargetTaskErrorVector(targetPoint.position));
-
-            if (useEntryConeInTargetMode)
-                targetErrors.Add(targetModeEntryConeWeight * EntryConeErrorVector());
-
-            AddArmSkullAvoidanceErrors(targetErrors);
-            return targetErrors.ToArray();
+            EBuf(targetModeTargetRCMWeight * GetTargetTaskErrorVector(targetPoint.position));
+            if (useEntryConeInTargetMode) EBuf(targetModeEntryConeWeight * EntryConeErrorVector());
+            AddArmSkullAvoidanceErrorsBuf();
+            return;
         }
+        EBuf(entryWeight * GetEntryErrorVector(entryPoint.position));
+        EBuf(targetTipWeight * GetTargetTaskErrorVector(targetPoint.position));
+        EBuf(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
+        AddSkullAvoidanceErrorsBuf();
+    }
 
-        List<Vector3> errors = new List<Vector3>();
+    private void FillInsertionSequenceErrors()
+    {
+        if (insertionPhase == InsertionPhase.ApproachEntry)
+        {
+            EBuf(entryApproachTipWeight * TipToPointErrorVector(GetPreEntryPoint()));
+            EBuf(preAlignEntryAxisWeight * 2.2f * EntryTargetAxisAlignmentErrorVector());
+            EBuf(preAlignEntryAxisWeight * PointToInfiniteToolAxisErrorVector(entryPoint.position));
+            AddNeedleSkullAvoidanceErrorsBuf();
+            AddArmSkullAvoidanceErrorsBuf();
+            return;
+        }
+        if (insertionPhase == InsertionPhase.AlignAtEntry)
+        {
+            EBuf(alignAtEntryTipWeight * TipToPointErrorVector(entryPoint.position));
+            EBuf(alignAtEntryAxisWeight * EntryTargetAxisAlignmentErrorVector());
+            EBuf(alignAtEntryAxisWeight * PointToInfiniteToolAxisErrorVector(entryPoint.position));
+            AddNeedleSkullAvoidanceErrorsBuf();
+            AddArmSkullAvoidanceErrorsBuf();
+            return;
+        }
+        if (insertionPhase == InsertionPhase.InsertToTarget)
+        {
+            EBuf(insertionEntryWeight * GetEntryErrorVector(entryPoint.position));
+            EBuf(insertionTargetWeight * TipToPointErrorVector(GetCurrentInsertionTargetPoint()));
+            EBuf(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
+            AddNeedleSkullAvoidanceErrorsBuf();
+            AddArmSkullAvoidanceErrorsBuf();
+            return;
+        }
+        EBuf(Vector3.zero);
+        AddSkullAvoidanceErrorsBuf();
+    }
 
-        errors.Add(entryWeight * GetEntryErrorVector(entryPoint.position));
-        errors.Add(targetTipWeight * GetTargetTaskErrorVector(targetPoint.position));
-        errors.Add(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
-        AddSkullAvoidanceErrors(errors);
+    private void EBuf(Vector3 v)
+    {
+        if (_errorBufCount >= _errorBuf.Length)
+        {
+            System.Array.Resize(ref _errorBuf, _errorBuf.Length * 2);
+        }
+        _errorBuf[_errorBufCount++] = v;
+    }
 
-        return errors.ToArray();
+    private void AddSkullAvoidanceErrorsBuf() { AddNeedleSkullAvoidanceErrorsBuf(); AddArmSkullAvoidanceErrorsBuf(); }
+
+    private void AddNeedleSkullAvoidanceErrorsBuf()
+    {
+        int samples = Mathf.Max(2, needleAvoidanceSamples);
+        if (!avoidNeedleFromSkullBeforeInsertion || skullCollider == null || toolFrame == null || toolTip == null)
+        {
+            for (int i = 0; i < samples; i++) EBuf(Vector3.zero);
+            return;
+        }
+        Vector3 basePos = GetToolBasePosition();
+        Vector3 tipPos  = GetToolTipPosition();
+        bool realInsertion = useInsertionSequence && insertionPhase == InsertionPhase.InsertToTarget
+            && entryRCMFormulaErrorMm <= 10.0f && entryTargetAxisErrorDeg <= 10.0f;
+        for (int i = 0; i < samples; i++)
+        {
+            float t = samples == 1 ? 0f : (float)i / (float)(samples - 1);
+            Vector3 p = Vector3.Lerp(basePos, tipPos, t);
+            if (realInsertion && IsPointInsideNeedleInsertionCorridor(p)) { EBuf(Vector3.zero); continue; }
+            EBuf(needleSkullAvoidanceWeight * ComputePushOutOfSkull(p, needleSafetyMargin));
+        }
+    }
+
+    private void AddArmSkullAvoidanceErrorsBuf()
+    {
+        int samples = Mathf.Max(2, armAvoidanceSamplesPerSegment);
+        int segs = GetExpectedArmAvoidanceSegments();
+        if (!avoidArmLinksFromSkull || skullCollider == null || joints == null || joints.Length < 2)
+        {
+            for (int i = 0; i < segs * samples; i++) EBuf(Vector3.zero);
+            return;
+        }
+        for (int i = 0; i < joints.Length - 1; i++)
+        {
+            if (joints[i] == null || joints[i + 1] == null) { for (int s = 0; s < samples; s++) EBuf(Vector3.zero); continue; }
+            AddSegSkullBuf(joints[i].position, joints[i + 1].position, samples);
+        }
+        bool skipLast = useInsertionSequence && insertionPhase == InsertionPhase.InsertToTarget;
+        if (skipLast || joints[joints.Length - 1] == null || toolFrame == null)
+            for (int s = 0; s < samples; s++) EBuf(Vector3.zero);
+        else
+            AddSegSkullBuf(joints[joints.Length - 1].position, toolFrame.position, samples);
+    }
+
+    private void AddSegSkullBuf(Vector3 a, Vector3 b, int samples)
+    {
+        // The aggressive arm safety values are useful for Task 3, but they dominate
+        // the decorative cone demos. In non-insertion modes we use the older, softer
+        // avoidance behavior so Task 2/4 can visibly move while still reporting violations.
+        float activeWeight = useInsertionSequence ? armSkullAvoidanceWeight : Mathf.Min(armSkullAvoidanceWeight, 10.0f);
+        float activeMargin = useInsertionSequence ? armSafetyMargin : Mathf.Min(armSafetyMargin, 0.020f);
+
+        for (int s = 0; s < samples; s++)
+        {
+            float t = samples == 1 ? 0f : (float)s / (float)(samples - 1);
+            EBuf(activeWeight * ComputePushOutOfSkull(Vector3.Lerp(a, b, t), activeMargin));
+        }
+    }
+
+    private Vector3[] GetCurrentErrorVectors()
+    {
+        FillErrorBuffer();
+        var result = new Vector3[_errorBufCount];
+        System.Array.Copy(_errorBuf, result, _errorBufCount);
+        return result;
     }
 
     private Vector3[] GetInsertionSequenceErrorVectors()
@@ -841,7 +1007,8 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             errors.Add(preAlignEntryAxisWeight * 2.2f * EntryTargetAxisAlignmentErrorVector());
             errors.Add(preAlignEntryAxisWeight * PointToInfiniteToolAxisErrorVector(entryPoint.position));
 
-            // During approach, only keep the arm outside the skull.
+            // During approach the needle is not allowed to cross the skull at all.
+            AddNeedleSkullAvoidanceErrors(errors);
             AddArmSkullAvoidanceErrors(errors);
             return errors.ToArray();
         }
@@ -853,7 +1020,8 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             errors.Add(alignAtEntryAxisWeight * EntryTargetAxisAlignmentErrorVector());
             errors.Add(alignAtEntryAxisWeight * PointToInfiniteToolAxisErrorVector(entryPoint.position));
 
-            // Keep the real arm outside the skull while aligning.
+            // Keep both needle and arm outside the skull while aligning.
+            AddNeedleSkullAvoidanceErrors(errors);
             AddArmSkullAvoidanceErrors(errors);
             return errors.ToArray();
         }
@@ -868,7 +1036,8 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             errors.Add(insertionTargetWeight * TipToPointErrorVector(insertionTarget));
             errors.Add(insertionAxisWeight * EntryTargetAxisAlignmentErrorVector());
 
-            // The needle is allowed to enter only through the surgical corridor; arm links stay outside.
+            // The needle is allowed only inside the surgical corridor; arm links stay outside.
+            AddNeedleSkullAvoidanceErrors(errors);
             AddArmSkullAvoidanceErrors(errors);
             return errors.ToArray();
         }
@@ -996,58 +1165,75 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
     private void AddSegmentSkullAvoidanceErrors(List<Vector3> errors, Vector3 a, Vector3 b, int samples)
     {
+        float activeWeight = useInsertionSequence ? armSkullAvoidanceWeight : Mathf.Min(armSkullAvoidanceWeight, 10.0f);
+        float activeMargin = useInsertionSequence ? armSafetyMargin : Mathf.Min(armSafetyMargin, 0.020f);
+
         for (int s = 0; s < samples; s++)
         {
             float t = samples == 1 ? 0f : (float)s / (float)(samples - 1);
             Vector3 p = Vector3.Lerp(a, b, t);
-            Vector3 push = ComputePushOutOfSkull(p);
+            Vector3 push = ComputePushOutOfSkull(p, activeMargin);
 
             // Always add one vector per sample, even if it is zero.
-            errors.Add(armSkullAvoidanceWeight * push);
+            errors.Add(activeWeight * push);
         }
     }
 
     private Vector3 ComputePushOutOfSkull(Vector3 point)
     {
-        return ComputePushOutOfSkull(point, armSafetyMargin);
+        return ComputePushOutOfSkullInternal(point, ref _skullRadiiArm);
     }
 
     private Vector3 ComputePushOutOfSkull(Vector3 point, float safetyMargin)
     {
-        if (skullCollider == null)
-            return Vector3.zero;
+        if (safetyMargin == armSafetyMargin)
+            return ComputePushOutOfSkullInternal(point, ref _skullRadiiArm);
+        return ComputePushOutOfSkullInternal(point, ref _skullRadiiNeedle);
+    }
 
+    private void RefreshSkullCache()
+    {
+        if (skullCollider == null) { _skullCacheDirty = true; return; }
         Bounds b = skullCollider.bounds;
-        Vector3 center = b.center;
+        _skullCenter = b.center;
+        Vector3 e = b.extents;
+        float arm  = Mathf.Max(0f, armSafetyMargin);
+        float ndl  = Mathf.Max(0f, needleSafetyMargin);
+        _skullRadiiArm    = new Vector3(Mathf.Max(e.x + arm,  1e-4f), Mathf.Max(e.y + arm,  1e-4f), Mathf.Max(e.z + arm,  1e-4f));
+        _skullRadiiNeedle = new Vector3(Mathf.Max(e.x + ndl,  1e-4f), Mathf.Max(e.y + ndl,  1e-4f), Mathf.Max(e.z + ndl,  1e-4f));
+        _skullCacheDirty = false;
+    }
 
-        Vector3 radii = b.extents + Vector3.one * Mathf.Max(0f, safetyMargin);
-        radii.x = Mathf.Max(radii.x, 1e-4f);
-        radii.y = Mathf.Max(radii.y, 1e-4f);
-        radii.z = Mathf.Max(radii.z, 1e-4f);
+    private Vector3 ComputePushOutOfSkullInternal(Vector3 point, ref Vector3 radii)
+    {
+        if (skullCollider == null) return Vector3.zero;
+        if (_skullCacheDirty) RefreshSkullCache();
 
-        Vector3 q = new Vector3(
-            (point.x - center.x) / radii.x,
-            (point.y - center.y) / radii.y,
-            (point.z - center.z) / radii.z
-        );
+        float qx = (point.x - _skullCenter.x) / radii.x;
+        float qy = (point.y - _skullCenter.y) / radii.y;
+        float qz = (point.z - _skullCenter.z) / radii.z;
+        float qNorm = Mathf.Sqrt(qx * qx + qy * qy + qz * qz);
 
-        float qNorm = q.magnitude;
+        if (qNorm >= 1f) return Vector3.zero;
 
-        if (qNorm >= 1f)
-            return Vector3.zero;
+        float inv = qNorm < 1e-5f ? 0f : 1f / qNorm;
+        float dx = (qNorm < 1e-5f ? 0f : qx * inv);
+        float dy = (qNorm < 1e-5f ? 1f : qy * inv);
+        float dz = (qNorm < 1e-5f ? 0f : qz * inv);
 
-        Vector3 dir = qNorm < 1e-5f ? Vector3.up : q / qNorm;
-
-        Vector3 safePoint = center + new Vector3(
-            dir.x * radii.x,
-            dir.y * radii.y,
-            dir.z * radii.z
-        );
-
-        return safePoint - point;
+        return new Vector3(
+            _skullCenter.x + dx * radii.x - point.x,
+            _skullCenter.y + dy * radii.y - point.y,
+            _skullCenter.z + dz * radii.z - point.z);
     }
 
     private float GetMaxArmSkullViolation()
+    {
+        // Debug/log value = real penetration only. The soft avoidance can still use armSafetyMargin.
+        return GetMaxArmSkullViolationWithMargin(0.0f, true);
+    }
+
+    private float GetMaxArmSkullViolationWithMargin(float safetyMargin, bool skipToolCarrierDuringInsertion)
     {
         if (!avoidArmLinksFromSkull || skullCollider == null || joints == null || joints.Length < 2)
             return 0f;
@@ -1060,20 +1246,21 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             if (joints[i] == null || joints[i + 1] == null)
                 continue;
 
-            maxViolation = Mathf.Max(maxViolation, GetMaxSegmentSkullViolation(joints[i].position, joints[i + 1].position, samples));
+            maxViolation = Mathf.Max(maxViolation, GetMaxSegmentSkullViolation(joints[i].position, joints[i + 1].position, samples, safetyMargin));
         }
 
         bool skipLastSegment =
+            skipToolCarrierDuringInsertion &&
             useInsertionSequence &&
             insertionPhase == InsertionPhase.InsertToTarget;
 
         if (!skipLastSegment && joints[joints.Length - 1] != null && toolFrame != null)
-            maxViolation = Mathf.Max(maxViolation, GetMaxSegmentSkullViolation(joints[joints.Length - 1].position, toolFrame.position, samples));
+            maxViolation = Mathf.Max(maxViolation, GetMaxSegmentSkullViolation(joints[joints.Length - 1].position, toolFrame.position, samples, safetyMargin));
 
         return maxViolation;
     }
 
-    private float GetMaxSegmentSkullViolation(Vector3 a, Vector3 b, int samples)
+    private float GetMaxSegmentSkullViolation(Vector3 a, Vector3 b, int samples, float safetyMargin)
     {
         float maxViolation = 0f;
 
@@ -1081,10 +1268,64 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         {
             float t = samples == 1 ? 0f : (float)s / (float)(samples - 1);
             Vector3 p = Vector3.Lerp(a, b, t);
-            maxViolation = Mathf.Max(maxViolation, ComputePushOutOfSkull(p).magnitude);
+            maxViolation = Mathf.Max(maxViolation, ComputePushOutOfSkull(p, safetyMargin).magnitude);
         }
 
         return maxViolation;
+    }
+
+    private float GetMaxNeedleSkullViolationWithMargin(float safetyMargin)
+    {
+        if (skullCollider == null || toolFrame == null || toolTip == null)
+            return 0f;
+
+        int samples = Mathf.Max(2, needleAvoidanceSamples);
+        Vector3 basePos = GetToolBasePosition();
+        Vector3 tipPos = GetToolTipPosition();
+        float maxViolation = 0f;
+
+        for (int i = 0; i < samples; i++)
+        {
+            float t = samples == 1 ? 0f : (float)i / (float)(samples - 1);
+            Vector3 p = Vector3.Lerp(basePos, tipPos, t);
+            maxViolation = Mathf.Max(maxViolation, ComputePushOutOfSkull(p, safetyMargin).magnitude);
+        }
+
+        return maxViolation;
+    }
+
+    private bool ShouldUseHardSkullSafetyThisStep()
+    {
+        if (!enforceZeroSkullViolation || skullCollider == null)
+            return false;
+
+        // Task 2 and Task 4 are demonstration cone modes around/inside the skull.
+        // Hard rejection there suppresses the visible cone and can make the trocar appear to drift.
+        // Keep hard skull backtracking only for the real insertion sequence (Task 3).
+        if (!useInsertionSequence)
+            return false;
+
+        return true;
+    }
+
+    private float GetHardSkullViolationForCurrentPose()
+    {
+        if (!enforceZeroSkullViolation || skullCollider == null)
+            return 0f;
+
+        float margin = Mathf.Max(0f, hardSkullSafetyMargin);
+        float armViolation = GetMaxArmSkullViolationWithMargin(margin, false);
+        float needleViolation = 0f;
+
+        bool needleMustStayOutside =
+            !useInsertionSequence ||
+            insertionPhase == InsertionPhase.ApproachEntry ||
+            insertionPhase == InsertionPhase.AlignAtEntry;
+
+        if (needleMustStayOutside)
+            needleViolation = Mathf.Max(GetSkullViolationDistance(), GetMaxNeedleSkullViolationWithMargin(margin));
+
+        return Mathf.Max(armViolation, needleViolation);
     }
 
     private Vector3 GetEntryErrorVector(Vector3 point)
@@ -1701,32 +1942,25 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         return Vector3.forward;
     }
 
-    private float[,] ComputeNumericalJacobian(float[] baseError, int m, int variableCount)
+    private void ComputeNumericalJacobianInto(float[] baseError, int m, int variableCount, float[,] J)
     {
-        float[,] J = new float[m, variableCount];
-
         int jointCount = joints == null ? 0 : joints.Length;
-        float[] originalAngles = new float[jointCount];
+        if (_origAngles.Length < jointCount) _origAngles = new float[jointCount + 2];
 
         for (int i = 0; i < jointCount; i++)
-            originalAngles[i] = GetCurrentJointAngleDeg(i);
+            _origAngles[i] = GetCurrentJointAngleDeg(i);
 
         float originalEntryLambda = entryLambda;
         float originalTargetLambda = targetLambda;
 
         for (int j = 0; j < jointCount; j++)
         {
-            if (joints[j] == null)
-                continue;
-
-            float stepDeg = GetUsableJointFiniteDifferenceDeg(j, originalAngles[j]);
-
-            if (Mathf.Abs(stepDeg) < 1e-8f)
-                continue;
-
-            SetJointAngleDeg(j, originalAngles[j] + stepDeg);
-            FillJacobianColumn(J, j, baseError, stepDeg * Mathf.Deg2Rad, m);
-            SetJointAngleDeg(j, originalAngles[j]);
+            if (joints[j] == null) continue;
+            float stepDeg = GetUsableJointFiniteDifferenceDeg(j, _origAngles[j]);
+            if (Mathf.Abs(stepDeg) < 1e-8f) continue;
+            SetJointAngleDeg(j, _origAngles[j] + stepDeg);
+            FillJacobianColumnInto(J, j, baseError, stepDeg * Mathf.Deg2Rad, m);
+            SetJointAngleDeg(j, _origAngles[j]);
         }
 
         int column = jointCount;
@@ -1734,52 +1968,55 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (useLinkBasedRCMFormula && optimizeEntryLambda && column < variableCount)
         {
             float step = GetUsableLambdaFiniteDifference(entryLambda);
-
             if (Mathf.Abs(step) > 1e-8f)
             {
                 entryLambda = Mathf.Clamp01(originalEntryLambda + step);
-                FillJacobianColumn(J, column, baseError, step, m);
+                FillJacobianColumnInto(J, column, baseError, step, m);
                 entryLambda = originalEntryLambda;
             }
-
             column++;
         }
 
         if (useTargetRCMFormula && optimizeTargetLambda && column < variableCount)
         {
             float step = GetUsableLambdaFiniteDifference(targetLambda);
-
             if (Mathf.Abs(step) > 1e-8f)
             {
                 targetLambda = Mathf.Clamp01(originalTargetLambda + step);
-                FillJacobianColumn(J, column, baseError, step, m);
+                FillJacobianColumnInto(J, column, baseError, step, m);
                 targetLambda = originalTargetLambda;
             }
         }
 
-        RestoreJointAngles(originalAngles);
+        RestoreJointAngles(_origAngles);
         entryLambda = originalEntryLambda;
         targetLambda = originalTargetLambda;
+    }
 
+    private void FillJacobianColumnInto(float[,] J, int column, float[] baseError, float step, int m)
+    {
+        FillErrorBuffer();
+        int usable = Mathf.Min(_errorBufCount, m / 3);
+        float invStep = 1f / step;
+        for (int k = 0; k < usable; k++)
+        {
+            int r = k * 3;
+            J[r,     column] = (_errorBuf[k].x - baseError[r])     * invStep;
+            J[r + 1, column] = (_errorBuf[k].y - baseError[r + 1]) * invStep;
+            J[r + 2, column] = (_errorBuf[k].z - baseError[r + 2]) * invStep;
+        }
+    }
+
+    private float[,] ComputeNumericalJacobian(float[] baseError, int m, int variableCount)
+    {
+        float[,] J = new float[m, variableCount];
+        ComputeNumericalJacobianInto(baseError, m, variableCount, J);
         return J;
     }
 
     private void FillJacobianColumn(float[,] J, int column, float[] baseError, float step, int m)
     {
-        Vector3[] perturbedErrors = GetCurrentErrorVectors();
-        float[] ePerturbed = new float[m];
-
-        int usableCount = Mathf.Min(perturbedErrors.Length, m / 3);
-
-        for (int k = 0; k < usableCount; k++)
-        {
-            ePerturbed[k * 3 + 0] = perturbedErrors[k].x;
-            ePerturbed[k * 3 + 1] = perturbedErrors[k].y;
-            ePerturbed[k * 3 + 2] = perturbedErrors[k].z;
-        }
-
-        for (int row = 0; row < m; row++)
-            J[row, column] = (ePerturbed[row] - baseError[row]) / step;
+        FillJacobianColumnInto(J, column, baseError, step, m);
     }
 
     private int GetActiveVariableCount()
@@ -1803,12 +2040,28 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         int jointCount = joints == null ? 0 : joints.Length;
         int usableJointCount = Mathf.Min(jointCount, dx.Length);
 
+        float[] originalAngles = new float[jointCount];
+        for (int i = 0; i < jointCount; i++)
+            originalAngles[i] = GetCurrentJointAngleDeg(i);
+
+        float originalEntryLambda = entryLambda;
+        float originalTargetLambda = targetLambda;
+
+        float[] jointDeltaDeg = new float[usableJointCount];
+
         for (int i = 0; i < usableJointCount; i++)
         {
             if (joints[i] == null)
+            {
+                jointDeltaDeg[i] = 0f;
                 continue;
+            }
 
             float deltaDeg = dx[i] * Mathf.Rad2Deg * ikStepScale;
+
+            float phaseStepScale = GetInsertionPhaseStepScale();
+            float phaseMaxDelta = GetInsertionPhaseMaxDeltaDegPerIteration();
+            deltaDeg *= phaseStepScale;
 
             if (useInsertionSequence && insertionPhase == InsertionPhase.InsertToTarget)
             {
@@ -1820,28 +2073,131 @@ public class DoubleRCMUnityController2 : MonoBehaviour
                     deltaDeg *= 0.20f;
             }
 
-            deltaDeg = Mathf.Clamp(deltaDeg, -maxDeltaDegPerIteration, maxDeltaDegPerIteration);
+            float effectiveMaxDelta = maxDeltaDegPerIteration;
+            if (phaseMaxDelta > 0f)
+                effectiveMaxDelta = Mathf.Min(effectiveMaxDelta, phaseMaxDelta);
 
-            ApplyJointDeltaDeg(i, deltaDeg);
+            jointDeltaDeg[i] = Mathf.Clamp(deltaDeg, -effectiveMaxDelta, effectiveMaxDelta);
         }
 
-        int index = jointCount;
+        int lambdaIndex = jointCount;
+        float entryLambdaDelta = 0f;
+        float targetLambdaDelta = 0f;
+        bool hasEntryLambdaDelta = false;
+        bool hasTargetLambdaDelta = false;
 
-        if (useLinkBasedRCMFormula && optimizeEntryLambda && index < dx.Length)
+        if (useLinkBasedRCMFormula && optimizeEntryLambda && lambdaIndex < dx.Length)
         {
-            ApplyLambdaDelta(ref entryLambda, dx[index]);
-            index++;
+            entryLambdaDelta = GetScaledLambdaDelta(dx[lambdaIndex]);
+            hasEntryLambdaDelta = true;
+            lambdaIndex++;
         }
 
-        if (useTargetRCMFormula && optimizeTargetLambda && index < dx.Length)
-            ApplyLambdaDelta(ref targetLambda, dx[index]);
+        if (useTargetRCMFormula && optimizeTargetLambda && lambdaIndex < dx.Length)
+        {
+            targetLambdaDelta = GetScaledLambdaDelta(dx[lambdaIndex]);
+            hasTargetLambdaDelta = true;
+        }
+
+        bool hardSafetyActive = ShouldUseHardSkullSafetyThisStep();
+        float tolerance = Mathf.Max(0f, hardSafetyToleranceMm) * 0.001f;
+        float beforeViolation = hardSafetyActive ? GetHardSkullViolationForCurrentPose() : 0f;
+        int attempts = hardSafetyActive ? Mathf.Max(0, hardSafetyBacktrackingSteps) : 0;
+
+        for (int attempt = 0; attempt <= attempts; attempt++)
+        {
+            float scale = hardSafetyActive ? Mathf.Pow(0.5f, attempt) : 1.0f;
+
+            RestoreJointAngles(originalAngles);
+            entryLambda = originalEntryLambda;
+            targetLambda = originalTargetLambda;
+
+            ApplyPreparedStep(jointDeltaDeg, scale);
+
+            if (hasEntryLambdaDelta)
+                entryLambda = Mathf.Clamp01(originalEntryLambda + entryLambdaDelta * scale);
+
+            if (hasTargetLambdaDelta)
+                targetLambda = Mathf.Clamp01(originalTargetLambda + targetLambdaDelta * scale);
+
+            if (!hardSafetyActive)
+                return;
+
+            float afterViolation = GetHardSkullViolationForCurrentPose();
+
+            bool initiallySafe = beforeViolation <= tolerance;
+            bool accepted = initiallySafe
+                ? afterViolation <= tolerance
+                : afterViolation <= beforeViolation + 1e-6f;
+
+            if (accepted)
+                return;
+        }
+
+        RestoreJointAngles(originalAngles);
+        entryLambda = originalEntryLambda;
+        targetLambda = originalTargetLambda;
+    }
+
+    private float GetInsertionPhaseStepScale()
+    {
+        if (!useInsertionPhaseSpeedLimits || !useInsertionSequence)
+            return 1.0f;
+
+        if (insertionPhase == InsertionPhase.ApproachEntry)
+            return Mathf.Clamp(approachEntryStepScale, 0.05f, 1.0f);
+
+        if (insertionPhase == InsertionPhase.AlignAtEntry)
+            return Mathf.Clamp(alignAtEntryStepScale, 0.05f, 1.0f);
+
+        if (insertionPhase == InsertionPhase.InsertToTarget)
+            return Mathf.Clamp(insertToTargetStepScale, 0.05f, 1.0f);
+
+        return 1.0f;
+    }
+
+    private float GetInsertionPhaseMaxDeltaDegPerIteration()
+    {
+        if (!useInsertionPhaseSpeedLimits || !useInsertionSequence)
+            return -1.0f;
+
+        if (insertionPhase == InsertionPhase.ApproachEntry)
+            return approachEntryMaxDeltaDegPerIteration;
+
+        if (insertionPhase == InsertionPhase.AlignAtEntry)
+            return alignAtEntryMaxDeltaDegPerIteration;
+
+        if (insertionPhase == InsertionPhase.InsertToTarget)
+            return insertToTargetMaxDeltaDegPerIteration;
+
+        return -1.0f;
+    }
+
+    private void ApplyPreparedStep(float[] jointDeltaDeg, float scale)
+    {
+        if (jointDeltaDeg == null)
+            return;
+
+        int count = Mathf.Min(jointDeltaDeg.Length, joints == null ? 0 : joints.Length);
+
+        for (int i = 0; i < count; i++)
+        {
+            if (joints[i] == null)
+                continue;
+
+            ApplyJointDeltaDeg(i, jointDeltaDeg[i] * scale);
+        }
+    }
+
+    private float GetScaledLambdaDelta(float rawDelta)
+    {
+        float scaledDelta = rawDelta * lambdaStepScale;
+        return Mathf.Clamp(scaledDelta, -maxLambdaDeltaPerIteration, maxLambdaDeltaPerIteration);
     }
 
     private void ApplyLambdaDelta(ref float lambda, float delta)
     {
-        float scaledDelta = delta * lambdaStepScale;
-        scaledDelta = Mathf.Clamp(scaledDelta, -maxLambdaDeltaPerIteration, maxLambdaDeltaPerIteration);
-        lambda = Mathf.Clamp01(lambda + scaledDelta);
+        lambda = Mathf.Clamp01(lambda + GetScaledLambdaDelta(delta));
     }
 
     private float GetUsableJointFiniteDifferenceDeg(int jointIndex, float originalAngle)
@@ -2002,40 +2358,53 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         }
     }
 
-    private float[] SolveDampedLeastSquares(float[,] J, float[] e, int m, int n)
+    private void SolveDampedLeastSquaresInto(float[,] J, float[] e, int m, int n, float[] dxOut)
     {
-        float[,] A = new float[m, m];
+        float d2 = damping * damping;
+        float[,] A = new float[n, n];
+        float[] b = new float[n];
 
-        for (int r = 0; r < m; r++)
+        for (int i = 0; i < n; i++)
         {
-            for (int c = 0; c < m; c++)
+            float bi = 0f;
+            for (int r = 0; r < m; r++) bi += J[r, i] * e[r];
+            b[i] = -bi;
+
+            for (int j = i; j < n; j++)
             {
                 float sum = 0f;
-
-                for (int k = 0; k < n; k++)
-                    sum += J[r, k] * J[c, k];
-
-                A[r, c] = sum;
+                for (int r = 0; r < m; r++) sum += J[r, i] * J[r, j];
+                A[i, j] = A[j, i] = sum;
             }
-
-            A[r, r] += damping * damping;
+            A[i, i] += d2;
         }
 
-        float[] y = SolveLinearSystem(A, e, m);
+        float[] result = SolveLinearSystem(A, b, n);
+        for (int i = 0; i < n; i++) dxOut[i] = result[i];
+    }
 
-        float[] dq = new float[n];
+    private float[] SolveDampedLeastSquares(float[,] J, float[] e, int m, int n)
+    {
+        float d2 = damping * damping;
+        float[,] A = new float[n, n];
+        float[] b = new float[n];
 
-        for (int j = 0; j < n; j++)
+        for (int i = 0; i < n; i++)
         {
-            float sum = 0f;
+            float bi = 0f;
+            for (int r = 0; r < m; r++) bi += J[r, i] * e[r];
+            b[i] = -bi;
 
-            for (int r = 0; r < m; r++)
-                sum += J[r, j] * y[r];
-
-            dq[j] = -sum;
+            for (int j = i; j < n; j++)
+            {
+                float sum = 0f;
+                for (int r = 0; r < m; r++) sum += J[r, i] * J[r, j];
+                A[i, j] = A[j, i] = sum;
+            }
+            A[i, i] += d2;
         }
 
-        return dq;
+        return SolveLinearSystem(A, b, n);
     }
 
     private float[] SolveLinearSystem(float[,] A, float[] b, int n)
@@ -2235,7 +2604,7 @@ public class DoubleRCMUnityController2 : MonoBehaviour
             FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
             logWriter = new StreamWriter(stream);
             logWriter.WriteLine(
-                "time,phase,mode,tip_entry_error_mm,entry_rcm_error_mm,entry_axis_error_deg,target_rcm_or_tip_error_mm,final_target_tip_error_mm,insertion_progress,insertion_intermediate_error_mm,entry_cone_angle_deg,entry_cone_violation_deg,skull_violation_mm,arm_skull_violation_mm,entry_lambda,target_lambda,entry_segment,target_segment,joint_limits_ok," +
+                "time,dt,fps,phase,mode,tip_entry_error_mm,entry_rcm_error_mm,entry_axis_error_deg,target_rcm_or_tip_error_mm,final_target_tip_error_mm,insertion_progress,insertion_intermediate_error_mm,entry_cone_angle_deg,entry_cone_violation_deg,skull_violation_mm,arm_skull_violation_mm,entry_lambda,target_lambda,entry_segment,target_segment,joint_limits_ok," +
                 "tool_x,tool_y,tool_z,tip_x,tip_y,tip_z," +
                 "entry_x,entry_y,entry_z,target_x,target_y,target_z," +
                 "q0_deg,q1_deg,q2_deg,q3_deg,q4_deg,q5_deg"
@@ -2261,6 +2630,9 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         lastLogTime = Time.time;
 
+        float dt = Mathf.Max(Time.unscaledDeltaTime, 1e-6f);
+        float fps = 1.0f / dt;
+
         Vector3 toolPos = toolFrame.position;
         Vector3 tipPos = GetToolTipPosition();
         Vector3 entryPos = entryPoint.position;
@@ -2268,6 +2640,8 @@ public class DoubleRCMUnityController2 : MonoBehaviour
 
         logWriter.WriteLine(
             F(Time.time) + "," +
+            F(dt) + "," +
+            F(fps) + "," +
             insertionPhase.ToString() + "," +
             mode.ToString() + "," +
             F(tipEntryErrorMm) + "," +
@@ -2405,15 +2779,17 @@ public class DoubleRCMUnityController2 : MonoBehaviour
         if (!showOverlay)
             return;
 
-        if (overlayOwner == null || overlayOwner == this)
-            ClaimOverlayOwnership();
-        else
+        if (!enabled || !gameObject.activeInHierarchy)
             return;
+
+        // Do not silently return because another stale controller owns the overlay.
+        // The active controller that reaches OnGUI claims the overlay and draws it.
+        ClaimOverlayOwnership();
 
         InitGUIStyles();
 
         int oldDepth = GUI.depth;
-        GUI.depth = -100;
+        GUI.depth = -10000;
 
         float margin = overlayMargin;
         float w = overlayWidth;

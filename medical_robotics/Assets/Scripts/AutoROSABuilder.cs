@@ -42,7 +42,7 @@ public class AutoROSABuilder : MonoBehaviour
     public float skullRadius = 0.135f;
     // Top-lateral entry, but the skull center remains around the previous scene height.
     // The offset puts the entry on the ellipsoid surface and the target inside.
-    public Vector3 skullCenterOffsetFromEntry = new Vector3(0.06f, -0.13f, 0f);
+    public Vector3 skullCenterOffsetFromEntry = new Vector3(0.065f, -0.155f, 0.03f);
     public Vector3 skullScaleFactors = new Vector3(1.40f, 1.50f, 1.20f);
 
     [Header("Needle-skull avoidance")]
@@ -56,7 +56,7 @@ public class AutoROSABuilder : MonoBehaviour
 
     [Header("Robot placement")]
     [Tooltip("Move only the generated robot base/arm. Entry, target and skull are kept at their world positions when created.")]
-    public Vector3 robotBaseOffset = new Vector3(-0.18f, 0f, -0.46f);
+    public Vector3 robotBaseOffset = new Vector3(-0.32f, 0f, -0.62f);
 
     [Tooltip("Automatically rotates the base yaw so the arm initially faces the entry point.")]
     public bool autoOrientBaseToEntry = true;
@@ -64,7 +64,7 @@ public class AutoROSABuilder : MonoBehaviour
     [Tooltip("After build, if the initial arm geometry intersects the skull, the whole patient group is shifted a few millimeters until the scene starts collision-free.")]
     public bool autoClearInitialSkullArmOverlap = true;
 
-    public float initialSkullClearanceMm = 12.0f;
+    public float initialSkullClearanceMm = 22.0f;
 
     [Header("Build validation")]
     public bool validateWorkspaceAtBuild = true;
@@ -79,7 +79,7 @@ public class AutoROSABuilder : MonoBehaviour
 
     [Header("Controller")]
     public bool addController = true;
-    public bool useDemoStartPose = true;
+    public bool useDemoStartPose = false;
 
     private Material whiteMat;
     private Material blueMat;
@@ -296,8 +296,8 @@ public class AutoROSABuilder : MonoBehaviour
         if (joints == null || skull == null)
             return 0f;
 
-        int samples = 5;
-        int lastSafeJointSegment = Mathf.Max(0, joints.Length - 3);
+        int samples = 8;
+        int lastSafeJointSegment = Mathf.Max(0, joints.Length - 2);
         float maxPenetration = 0f;
 
         for (int s = 0; s <= lastSafeJointSegment; s++)
@@ -399,12 +399,12 @@ public class AutoROSABuilder : MonoBehaviour
 
         // The insertion sequence must not switch phase just because the tip touches the entry.
         // It first goes to a pre-entry point, then aligns the shaft with Entry->Target, then inserts.
-        controller.preEntryDistanceMm = 85.0f;
+        controller.preEntryDistanceMm = 135.0f;
         controller.preEntryReachedThresholdMm = 12.0f;
-        controller.insertionStartAxisThresholdDeg = 7.0f;
-        controller.insertionStartAxisDistanceThresholdMm = 6.0f;
-        controller.alignAtEntryTipWeight = 4.0f;
-        controller.alignAtEntryAxisWeight = 3.8f;
+        controller.insertionStartAxisThresholdDeg = 5.0f;
+        controller.insertionStartAxisDistanceThresholdMm = 4.0f;
+        controller.alignAtEntryTipWeight = 3.2f;
+        controller.alignAtEntryAxisWeight = 5.2f;
         controller.requireAlignedPoseBeforeInsertion = true;
         controller.showInsertionGateDebug = true;
 
@@ -425,38 +425,51 @@ public class AutoROSABuilder : MonoBehaviour
 
         // Solver: stronger than the old DoubleRCM defaults, but less jumpy than the failed PaperRCM setup.
         controller.solveIK = true;
-        controller.solverIterations = 8;
-        controller.damping = 0.11f;
+        controller.solverIterations = 12;
+        controller.damping = 0.08f;
         controller.finiteDifferenceDeg = 0.35f;
-        controller.ikStepScale = 0.32f;
-        controller.maxDeltaDegPerIteration = 0.42f;
+        controller.ikStepScale = 0.38f;
+        controller.maxDeltaDegPerIteration = 1.8f;
+
+        // Slow down only the visual approach to the entry point in Task 3.
+        // Task 2/4 cone demos and the final insertion speed are left unchanged.
+        controller.useInsertionPhaseSpeedLimits = true;
+        controller.approachEntryStepScale = 0.45f;
+        controller.alignAtEntryStepScale = 0.38f;
+        controller.insertToTargetStepScale = 1.0f;
+        controller.approachEntryMaxDeltaDegPerIteration = 0.75f;
+        controller.alignAtEntryMaxDeltaDegPerIteration = 0.65f;
+        controller.insertToTargetMaxDeltaDegPerIteration = -1.0f;
 
         // Task gains. These prioritize the hard RCM before the decorative cone motions.
-        controller.entryApproachTipWeight = 3.4f;
-        controller.preAlignEntryAxisWeight = 1.15f;
-        controller.insertionEntryWeight = 5.4f;
-        controller.insertionTargetWeight = 3.0f;
-        controller.insertionAxisWeight = 1.4f;
+        controller.entryApproachTipWeight = 2.4f;
+        controller.preAlignEntryAxisWeight = 3.0f;
+        controller.insertionEntryWeight = 6.2f;
+        controller.insertionTargetWeight = 2.8f;
+        controller.insertionAxisWeight = 2.4f;
 
         controller.entryWeight = 5.0f;
         controller.targetTipWeight = 3.0f;
+        // Restored from the older working cone demo: keep the RCM constraints dominant.
+        // The cone is visible, but it does not steal priority from target/entry RCM.
         controller.targetModeTargetRCMWeight = 5.5f;
         controller.targetModeEntryConeWeight = 1.6f;
         controller.entryTipConeRCMWeight = 5.8f;
         controller.entryTipConeTipWeight = 2.4f;
         controller.entryTipConeAxisWeight = 1.0f;
 
-        // Cone demos must remain secondary; otherwise they can fight the RCM constraint.
         controller.useEntryConeInTargetMode = true;
         controller.animateTargetConeDemo = true;
+        // Older values were more stable for Task 2; slightly larger fraction keeps it visible.
         controller.entryConeHalfAngleDeg = 7.0f;
-        controller.entryConeMotionFraction = 0.55f;
-        controller.entryConeFrequencyHz = 0.15f;
+        controller.entryConeMotionFraction = 0.75f;
+        controller.entryConeFrequencyHz = 0.18f;
 
         controller.useTipConeAroundTargetMode = true;
-        controller.tipConeHalfAngleDeg = 4.0f;
-        controller.tipConeMotionFraction = 0.65f;
-        controller.tipConeFrequencyHz = 0.15f;
+        // Older Task 4 behavior: small but visible cone with entry RCM still dominant.
+        controller.tipConeHalfAngleDeg = 5.5f;
+        controller.tipConeMotionFraction = 0.85f;
+        controller.tipConeFrequencyHz = 0.18f;
 
         // Safety: keep the arm away from the skull, but do not let safety terms dominate the surgical task.
         controller.avoidSkullInDouble = true;
@@ -464,15 +477,20 @@ public class AutoROSABuilder : MonoBehaviour
         controller.skullAvoidanceWeight = 0.8f;
 
         controller.avoidNeedleFromSkullBeforeInsertion = avoidNeedleFromSkullBeforeInsertion;
-        controller.needleSkullAvoidanceWeight = needleSkullAvoidanceWeight;
-        controller.needleSafetyMargin = needleSafetyMargin;
-        controller.needleAvoidanceSamples = Mathf.Max(2, needleAvoidanceSamples);
-        controller.needleInsertionCorridorRadiusMm = needleInsertionCorridorRadiusMm;
+        controller.needleSkullAvoidanceWeight = Mathf.Max(80.0f, needleSkullAvoidanceWeight);
+        controller.needleSafetyMargin = Mathf.Max(0.055f, needleSafetyMargin);
+        controller.needleAvoidanceSamples = 6;
+        controller.needleInsertionCorridorRadiusMm = Mathf.Min(needleInsertionCorridorRadiusMm, 8.0f);
 
         controller.avoidArmLinksFromSkull = true;
-        controller.armSkullAvoidanceWeight = 10.0f;
-        controller.armSafetyMargin = 0.020f;
+        controller.armSkullAvoidanceWeight = 160.0f;
+        controller.armSafetyMargin = 0.075f;
         controller.armAvoidanceSamplesPerSegment = 4;
+
+        controller.enforceZeroSkullViolation = true;
+        controller.hardSkullSafetyMargin = 0.0f;
+        controller.hardSafetyBacktrackingSteps = 6;
+        controller.hardSafetyToleranceMm = 0.0f;
 
         controller.useJointLimits = true;
         controller.jointMinDeg = new float[] { -170f, -85f, -130f, -170f, -110f, -180f };
@@ -485,20 +503,20 @@ public class AutoROSABuilder : MonoBehaviour
         controller.overlayRefreshSeconds = 0.10f;
         controller.overlaySmoothing = 0.35f;
 
-        controller.logToCsv = false;
+        controller.logToCsv = true;
         controller.logFileName = "double_rcm_log.csv";
         controller.useTimestampedLogFile = true;
         controller.logEverySeconds = 0.03f;
 
-        controller.useDemoStartPose = useDemoStartPose;
+        controller.useDemoStartPose = false;
         controller.demoWaitBeforeSolving = 0.35f;
         controller.demoJointAnglesDeg = new float[]
         {
+            -8f,
+            -28f,
+            38f,
             0f,
-            -18f,
-            26f,
-            0f,
-            -14f,
+            -20f,
             0f
         };
     }

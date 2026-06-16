@@ -1,0 +1,299 @@
+RCM LOG ANALYSIS REPORT
+=======================
+Thresholds:
+entry_max=10mm | target_max=10mm | final_target_max=8mm | skull_max=0mm | min_fps=30 | cone_min_angle=3deg | cone_min_radius=8mm
+
+
+# FILE: double_rcm_log_20260616_135224_849.csv
+
+## Task2_TargetRCM_EntryCone cone quality
+No samples found for this task.
+
+## Task4_EntryRCM_TipCone cone quality
+No samples found for this task.
+Derived CSV saved: double_rcm_log_20260616_135224_849_derived.csv
+
+
+# FILE: double_rcm_log_20260616_135224_890.csv
+
+## whole file
+samples=1885 | duration_s=62.233 | modes=['Double', 'EntryTipCone', 'Target'] | phases=['ApproachEntry', 'Done', 'InsertToTarget']
+tip_entry_error_mm: mean=151.896, std=30.270, p95=161.251, max=410.609, final=161.223
+entry_rcm_error_mm: mean=6.583, std=17.464, p95=14.811, max=494.080, final=0.019
+entry_axis_error_deg: mean=3.107, std=3.013, p95=5.268, max=94.185, final=3.422
+target_rcm_or_tip_error_mm: mean=12.759, std=33.419, p95=91.325, max=545.883, final=9.615
+final_target_tip_error_mm: mean=12.759, std=33.419, p95=91.325, max=545.883, final=9.615
+insertion_intermediate_error_mm: mean=3.561, std=12.217, p95=9.691, max=410.609, final=9.615
+entry_cone_angle_deg: mean=3.102, std=2.882, p95=5.268, max=85.815, final=3.422
+entry_cone_violation_deg: mean=0.068, std=2.121, p95=0.000, max=78.815, final=0.000
+skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+arm_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+total_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+fps_est: mean=93.585, std=10.620, p95=106.854, max=180.537, final=11.834
+tip_speed_mm_s: mean=14.082, std=188.170, p95=22.577, max=5465.766, final=10.420
+tip_acc_mm_s2: mean=170.118, std=3213.296, p95=15.640, max=91258.600, final=3.966
+tip_jerk_mm_s3: mean=4329.949, std=75372.993, p95=318.689, max=1756610.760, final=104.914
+joint_speed_rms_deg_s: mean=6.624, std=33.847, p95=18.059, max=874.522, final=4.988
+joint_acc_rms_deg_s2: mean=75.992, std=700.310, p95=129.153, max=18108.820, final=1.242
+Acceptance checks:
+  FAIL entry_rcm_max_mm: 494.080 <= 10
+  FAIL target_rcm_or_tip_max_mm: 545.883 <= 10
+  FAIL final_target_final_mm: 9.615 <= 8
+  PASS total_skull_violation_max_mm: 0.000 <= 0
+  PASS fps_p05: 82.640 >= 30
+Oscillation estimate: entry_rcm_error_mm=0.21/s (PASS); target_rcm_or_tip_error_mm=0.02/s (PASS); final_target_tip_error_mm=0.02/s (PASS); entry_cone_angle_deg=0.53/s (PASS)
+Steady-state jitter: entry_rcm_error_mm_last5s_std=0.929; target_rcm_or_tip_error_mm_last5s_std=2.275; final_target_tip_error_mm_last5s_std=2.275
+
+## task=Task2_TargetRCM_EntryCone
+samples=850 | duration_s=28.091 | modes=['Target'] | phases=['Done']
+tip_entry_error_mm: mean=161.169, std=0.089, p95=161.258, max=161.341, final=161.245
+entry_rcm_error_mm: mean=12.149, std=3.838, p95=14.849, max=14.884, final=14.744
+entry_axis_error_deg: mean=4.292, std=1.414, p95=5.281, max=5.293, final=5.245
+target_rcm_or_tip_error_mm: mean=0.195, std=0.206, p95=0.532, max=0.538, final=0.001
+final_target_tip_error_mm: mean=0.195, std=0.206, p95=0.532, max=0.538, final=0.001
+insertion_intermediate_error_mm: mean=0.195, std=0.206, p95=0.532, max=0.538, final=0.001
+entry_cone_angle_deg: mean=4.292, std=1.414, p95=5.281, max=5.293, final=5.245
+entry_cone_violation_deg: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+arm_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+total_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+fps_est: mean=93.475, std=10.487, p95=104.919, max=180.537, final=92.794
+tip_speed_mm_s: mean=0.455, std=5.214, p95=0.562, max=149.388, final=149.388
+tip_acc_mm_s2: mean=8.771, std=117.669, p95=4.163, max=2438.277, final=2438.277
+tip_jerk_mm_s3: mean=266.761, std=3186.400, p95=133.480, max=71874.702, final=71874.702
+joint_speed_rms_deg_s: mean=7.429, std=16.086, p95=23.927, max=187.608, final=187.608
+joint_acc_rms_deg_s2: mean=65.485, std=291.066, p95=164.638, max=3423.631, final=3423.631
+Acceptance checks:
+  FAIL entry_rcm_max_mm: 14.884 <= 10
+  PASS target_rcm_or_tip_max_mm: 0.538 <= 10
+  PASS final_target_final_mm: 0.001 <= 8
+  PASS total_skull_violation_max_mm: 0.000 <= 0
+  PASS fps_p05: 84.304 >= 30
+Oscillation estimate: entry_rcm_error_mm=0.75/s (PASS); target_rcm_or_tip_error_mm=0.71/s (PASS); final_target_tip_error_mm=0.71/s (PASS); entry_cone_angle_deg=0.75/s (PASS)
+Steady-state jitter: entry_rcm_error_mm_last5s_std=4.049; target_rcm_or_tip_error_mm_last5s_std=0.210; final_target_tip_error_mm_last5s_std=0.210
+
+## task=Task3_Insertion
+samples=374 | duration_s=12.456 | modes=['Double'] | phases=['ApproachEntry', 'Done', 'InsertToTarget']
+tip_entry_error_mm: mean=116.305, std=55.085, p95=160.176, max=410.609, final=160.176
+entry_rcm_error_mm: mean=3.814, std=36.998, p95=1.010, max=494.080, final=1.010
+entry_axis_error_deg: mean=0.900, std=5.618, p95=1.025, max=94.185, final=1.025
+target_rcm_or_tip_error_mm: mean=49.591, std=62.178, p95=147.934, max=545.883, final=2.180
+final_target_tip_error_mm: mean=49.591, std=62.178, p95=147.934, max=545.883, final=2.180
+insertion_intermediate_error_mm: mean=3.231, std=26.108, p95=2.180, max=410.609, final=2.180
+entry_cone_angle_deg: mean=0.877, std=5.251, p95=1.025, max=85.815, final=1.025
+entry_cone_violation_deg: mean=0.342, std=4.752, p95=0.000, max=78.815, final=0.000
+skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+arm_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+total_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+fps_est: mean=93.259, std=11.842, p95=109.360, max=154.161, final=93.234
+tip_speed_mm_s: mean=54.586, std=419.779, p95=22.658, max=5465.766, final=29.281
+tip_acc_mm_s2: mean=793.782, std=7175.716, p95=13.918, max=91258.600, final=457.937
+tip_jerk_mm_s3: mean=20328.436, std=168127.379, p95=349.699, max=1756610.760, final=12933.574
+joint_speed_rms_deg_s: mean=9.272, std=70.390, p95=9.590, max=874.522, final=29.878
+joint_acc_rms_deg_s2: mean=164.307, std=1481.997, p95=17.254, max=18108.820, final=909.220
+Acceptance checks:
+  FAIL entry_rcm_max_mm: 494.080 <= 10
+  FAIL target_rcm_or_tip_max_mm: 545.883 <= 10
+  PASS final_target_final_mm: 2.180 <= 8
+  PASS total_skull_violation_max_mm: 0.000 <= 0
+  PASS fps_p05: 80.308 >= 30
+Oscillation estimate: entry_rcm_error_mm=0.08/s (PASS); target_rcm_or_tip_error_mm=0.00/s (PASS); final_target_tip_error_mm=0.00/s (PASS); entry_cone_angle_deg=0.00/s (PASS)
+Steady-state jitter: entry_rcm_error_mm_last5s_std=0.000; target_rcm_or_tip_error_mm_last5s_std=0.000; final_target_tip_error_mm_last5s_std=0.000
+
+## task=Task4_EntryRCM_TipCone
+samples=661 | duration_s=21.620 | modes=['EntryTipCone'] | phases=['Done']
+tip_entry_error_mm: mean=160.110, std=1.122, p95=161.255, max=161.596, final=161.223
+entry_rcm_error_mm: mean=0.993, std=0.938, p95=2.410, max=2.431, final=0.019
+entry_axis_error_deg: mean=2.831, std=0.903, p95=3.549, max=3.561, final=3.422
+target_rcm_or_tip_error_mm: mean=8.077, std=2.213, p95=9.844, max=9.871, final=9.615
+final_target_tip_error_mm: mean=8.077, std=2.213, p95=9.844, max=9.871, final=9.615
+insertion_intermediate_error_mm: mean=8.077, std=2.213, p95=9.844, max=9.871, final=9.615
+entry_cone_angle_deg: mean=2.831, std=0.903, p95=3.549, max=3.561, final=3.422
+entry_cone_violation_deg: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+arm_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+total_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+fps_est: mean=93.909, std=10.035, p95=107.040, max=170.056, final=11.834
+tip_speed_mm_s: mean=8.689, std=6.282, p95=10.904, max=149.740, final=10.420
+tip_acc_mm_s2: mean=24.723, std=135.815, p95=31.058, max=2413.586, final=3.966
+tip_jerk_mm_s3: mean=502.833, std=3688.155, p95=472.815, max=72495.773, final=104.914
+joint_speed_rms_deg_s: mean=4.091, std=10.938, p95=14.321, max=206.209, final=4.988
+joint_acc_rms_deg_s2: mean=39.535, std=202.650, p95=120.822, max=3197.712, final=1.242
+Acceptance checks:
+  PASS entry_rcm_max_mm: 2.431 <= 10
+  PASS target_rcm_or_tip_max_mm: 9.871 <= 10
+  FAIL final_target_final_mm: 9.615 <= 8
+  PASS total_skull_violation_max_mm: 0.000 <= 0
+  PASS fps_p05: 82.637 >= 30
+Oscillation estimate: entry_rcm_error_mm=0.69/s (PASS); target_rcm_or_tip_error_mm=0.69/s (PASS); final_target_tip_error_mm=0.69/s (PASS); entry_cone_angle_deg=0.69/s (PASS)
+Steady-state jitter: entry_rcm_error_mm_last5s_std=0.929; target_rcm_or_tip_error_mm_last5s_std=2.275; final_target_tip_error_mm_last5s_std=2.275
+
+## Task2_TargetRCM_EntryCone cone quality
+angle_source=cone_t2_angle_deg_geom | p95=5.280 deg | std=1.414 deg | range=4.512 deg
+  PASS cone_angle_p95 >= 3 deg
+  PASS cone_angle_std >= 0.35 deg
+radius_source=cone_t2_radius_mm_geom | p95=14.839 mm | std=3.973 mm
+  PASS cone_radius_p95 >= 8 mm
+target_RCM_or_tip_constraint: max=0.538 mm, mean=0.195 mm
+  PASS target_RCM_or_tip_max <= 10 mm
+entry-side point distance from nominal entry: mean=12.075 mm, max=14.890 mm
+  Note: in Task 2 this distance is the visible entry-side cone radius, not necessarily an RCM violation.
+
+## Task4_EntryRCM_TipCone cone quality
+angle_source=cone_t4_angle_deg_geom | p95=3.498 deg | std=0.966 deg | range=3.226 deg
+  PASS cone_angle_p95 >= 3 deg
+  PASS cone_angle_std >= 0.35 deg
+radius_source=cone_t4_radius_mm_geom | p95=9.809 mm | std=2.728 mm
+  PASS cone_radius_p95 >= 8 mm
+entry_RCM_constraint: max=2.431 mm, mean=0.993 mm
+  PASS entry_RCM_max <= 10 mm
+trocar/entry slip proxy (entry_rcm_error_mm): mean=0.993 mm, max=2.431 mm
+  PASS trocar_slip_max <= 10 mm
+
+Plots saved:
+  double_rcm_log_20260616_135224_890_errors_time.png
+  double_rcm_log_20260616_135224_890_skull_violation_time.png
+  double_rcm_log_20260616_135224_890_fps_time.png
+  double_rcm_log_20260616_135224_890_cone_angle_time.png
+  double_rcm_log_20260616_135224_890_cone_radius_time.png
+  double_rcm_log_20260616_135224_890_smoothness_time.png
+  double_rcm_log_20260616_135224_890_Task2_TargetRCM_EntryCone_cone_plane.png
+  double_rcm_log_20260616_135224_890_Task4_EntryRCM_TipCone_cone_plane.png
+Derived CSV saved: double_rcm_log_20260616_135224_890_derived.csv
+
+
+# MERGED SUMMARY
+
+## all files
+samples=1885 | duration_s=62.233 | modes=['Double', 'EntryTipCone', 'Target'] | phases=['ApproachEntry', 'Done', 'InsertToTarget']
+tip_entry_error_mm: mean=151.896, std=30.270, p95=161.251, max=410.609, final=161.223
+entry_rcm_error_mm: mean=6.583, std=17.464, p95=14.811, max=494.080, final=0.019
+entry_axis_error_deg: mean=3.107, std=3.013, p95=5.268, max=94.185, final=3.422
+target_rcm_or_tip_error_mm: mean=12.759, std=33.419, p95=91.325, max=545.883, final=9.615
+final_target_tip_error_mm: mean=12.759, std=33.419, p95=91.325, max=545.883, final=9.615
+insertion_intermediate_error_mm: mean=3.561, std=12.217, p95=9.691, max=410.609, final=9.615
+entry_cone_angle_deg: mean=3.102, std=2.882, p95=5.268, max=85.815, final=3.422
+entry_cone_violation_deg: mean=0.068, std=2.121, p95=0.000, max=78.815, final=0.000
+skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+arm_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+total_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+fps_est: mean=93.585, std=10.620, p95=106.854, max=180.537, final=11.834
+tip_speed_mm_s: mean=14.082, std=188.170, p95=22.577, max=5465.766, final=10.420
+tip_acc_mm_s2: mean=170.118, std=3213.296, p95=15.640, max=91258.600, final=3.966
+tip_jerk_mm_s3: mean=4329.949, std=75372.993, p95=318.689, max=1756610.760, final=104.914
+joint_speed_rms_deg_s: mean=6.624, std=33.847, p95=18.059, max=874.522, final=4.988
+joint_acc_rms_deg_s2: mean=75.992, std=700.310, p95=129.153, max=18108.820, final=1.242
+Acceptance checks:
+  FAIL entry_rcm_max_mm: 494.080 <= 10
+  FAIL target_rcm_or_tip_max_mm: 545.883 <= 10
+  FAIL final_target_final_mm: 9.615 <= 8
+  PASS total_skull_violation_max_mm: 0.000 <= 0
+  PASS fps_p05: 82.640 >= 30
+Oscillation estimate: entry_rcm_error_mm=0.21/s (PASS); target_rcm_or_tip_error_mm=0.02/s (PASS); final_target_tip_error_mm=0.02/s (PASS); entry_cone_angle_deg=0.53/s (PASS)
+Steady-state jitter: entry_rcm_error_mm_last5s_std=0.929; target_rcm_or_tip_error_mm_last5s_std=2.275; final_target_tip_error_mm_last5s_std=2.275
+
+## task=Task2_TargetRCM_EntryCone
+samples=850 | duration_s=28.091 | modes=['Target'] | phases=['Done']
+tip_entry_error_mm: mean=161.169, std=0.089, p95=161.258, max=161.341, final=161.245
+entry_rcm_error_mm: mean=12.149, std=3.838, p95=14.849, max=14.884, final=14.744
+entry_axis_error_deg: mean=4.292, std=1.414, p95=5.281, max=5.293, final=5.245
+target_rcm_or_tip_error_mm: mean=0.195, std=0.206, p95=0.532, max=0.538, final=0.001
+final_target_tip_error_mm: mean=0.195, std=0.206, p95=0.532, max=0.538, final=0.001
+insertion_intermediate_error_mm: mean=0.195, std=0.206, p95=0.532, max=0.538, final=0.001
+entry_cone_angle_deg: mean=4.292, std=1.414, p95=5.281, max=5.293, final=5.245
+entry_cone_violation_deg: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+arm_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+total_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+fps_est: mean=93.475, std=10.487, p95=104.919, max=180.537, final=92.794
+tip_speed_mm_s: mean=0.455, std=5.214, p95=0.562, max=149.388, final=149.388
+tip_acc_mm_s2: mean=8.771, std=117.669, p95=4.163, max=2438.277, final=2438.277
+tip_jerk_mm_s3: mean=266.761, std=3186.400, p95=133.480, max=71874.702, final=71874.702
+joint_speed_rms_deg_s: mean=7.429, std=16.086, p95=23.927, max=187.608, final=187.608
+joint_acc_rms_deg_s2: mean=65.485, std=291.066, p95=164.638, max=3423.631, final=3423.631
+Acceptance checks:
+  FAIL entry_rcm_max_mm: 14.884 <= 10
+  PASS target_rcm_or_tip_max_mm: 0.538 <= 10
+  PASS final_target_final_mm: 0.001 <= 8
+  PASS total_skull_violation_max_mm: 0.000 <= 0
+  PASS fps_p05: 84.304 >= 30
+Oscillation estimate: entry_rcm_error_mm=0.75/s (PASS); target_rcm_or_tip_error_mm=0.71/s (PASS); final_target_tip_error_mm=0.71/s (PASS); entry_cone_angle_deg=0.75/s (PASS)
+Steady-state jitter: entry_rcm_error_mm_last5s_std=4.049; target_rcm_or_tip_error_mm_last5s_std=0.210; final_target_tip_error_mm_last5s_std=0.210
+
+## task=Task3_Insertion
+samples=374 | duration_s=12.456 | modes=['Double'] | phases=['ApproachEntry', 'Done', 'InsertToTarget']
+tip_entry_error_mm: mean=116.305, std=55.085, p95=160.176, max=410.609, final=160.176
+entry_rcm_error_mm: mean=3.814, std=36.998, p95=1.010, max=494.080, final=1.010
+entry_axis_error_deg: mean=0.900, std=5.618, p95=1.025, max=94.185, final=1.025
+target_rcm_or_tip_error_mm: mean=49.591, std=62.178, p95=147.934, max=545.883, final=2.180
+final_target_tip_error_mm: mean=49.591, std=62.178, p95=147.934, max=545.883, final=2.180
+insertion_intermediate_error_mm: mean=3.231, std=26.108, p95=2.180, max=410.609, final=2.180
+entry_cone_angle_deg: mean=0.877, std=5.251, p95=1.025, max=85.815, final=1.025
+entry_cone_violation_deg: mean=0.342, std=4.752, p95=0.000, max=78.815, final=0.000
+skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+arm_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+total_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+fps_est: mean=93.259, std=11.842, p95=109.360, max=154.161, final=93.234
+tip_speed_mm_s: mean=54.586, std=419.779, p95=22.658, max=5465.766, final=29.281
+tip_acc_mm_s2: mean=793.782, std=7175.716, p95=13.918, max=91258.600, final=457.937
+tip_jerk_mm_s3: mean=20328.436, std=168127.379, p95=349.699, max=1756610.760, final=12933.574
+joint_speed_rms_deg_s: mean=9.272, std=70.390, p95=9.590, max=874.522, final=29.878
+joint_acc_rms_deg_s2: mean=164.307, std=1481.997, p95=17.254, max=18108.820, final=909.220
+Acceptance checks:
+  FAIL entry_rcm_max_mm: 494.080 <= 10
+  FAIL target_rcm_or_tip_max_mm: 545.883 <= 10
+  PASS final_target_final_mm: 2.180 <= 8
+  PASS total_skull_violation_max_mm: 0.000 <= 0
+  PASS fps_p05: 80.308 >= 30
+Oscillation estimate: entry_rcm_error_mm=0.08/s (PASS); target_rcm_or_tip_error_mm=0.00/s (PASS); final_target_tip_error_mm=0.00/s (PASS); entry_cone_angle_deg=0.00/s (PASS)
+Steady-state jitter: entry_rcm_error_mm_last5s_std=0.000; target_rcm_or_tip_error_mm_last5s_std=0.000; final_target_tip_error_mm_last5s_std=0.000
+
+## task=Task4_EntryRCM_TipCone
+samples=661 | duration_s=21.620 | modes=['EntryTipCone'] | phases=['Done']
+tip_entry_error_mm: mean=160.110, std=1.122, p95=161.255, max=161.596, final=161.223
+entry_rcm_error_mm: mean=0.993, std=0.938, p95=2.410, max=2.431, final=0.019
+entry_axis_error_deg: mean=2.831, std=0.903, p95=3.549, max=3.561, final=3.422
+target_rcm_or_tip_error_mm: mean=8.077, std=2.213, p95=9.844, max=9.871, final=9.615
+final_target_tip_error_mm: mean=8.077, std=2.213, p95=9.844, max=9.871, final=9.615
+insertion_intermediate_error_mm: mean=8.077, std=2.213, p95=9.844, max=9.871, final=9.615
+entry_cone_angle_deg: mean=2.831, std=0.903, p95=3.549, max=3.561, final=3.422
+entry_cone_violation_deg: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+arm_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+total_skull_violation_mm: mean=0.000, std=0.000, p95=0.000, max=0.000, final=0.000
+fps_est: mean=93.909, std=10.035, p95=107.040, max=170.056, final=11.834
+tip_speed_mm_s: mean=8.689, std=6.282, p95=10.904, max=149.740, final=10.420
+tip_acc_mm_s2: mean=24.723, std=135.815, p95=31.058, max=2413.586, final=3.966
+tip_jerk_mm_s3: mean=502.833, std=3688.155, p95=472.815, max=72495.773, final=104.914
+joint_speed_rms_deg_s: mean=4.091, std=10.938, p95=14.321, max=206.209, final=4.988
+joint_acc_rms_deg_s2: mean=39.535, std=202.650, p95=120.822, max=3197.712, final=1.242
+Acceptance checks:
+  PASS entry_rcm_max_mm: 2.431 <= 10
+  PASS target_rcm_or_tip_max_mm: 9.871 <= 10
+  FAIL final_target_final_mm: 9.615 <= 8
+  PASS total_skull_violation_max_mm: 0.000 <= 0
+  PASS fps_p05: 82.637 >= 30
+Oscillation estimate: entry_rcm_error_mm=0.69/s (PASS); target_rcm_or_tip_error_mm=0.69/s (PASS); final_target_tip_error_mm=0.69/s (PASS); entry_cone_angle_deg=0.69/s (PASS)
+Steady-state jitter: entry_rcm_error_mm_last5s_std=0.929; target_rcm_or_tip_error_mm_last5s_std=2.275; final_target_tip_error_mm_last5s_std=2.275
+
+## Task2_TargetRCM_EntryCone cone quality
+angle_source=cone_t2_angle_deg_geom | p95=5.280 deg | std=1.414 deg | range=4.512 deg
+  PASS cone_angle_p95 >= 3 deg
+  PASS cone_angle_std >= 0.35 deg
+radius_source=cone_t2_radius_mm_geom | p95=14.839 mm | std=3.973 mm
+  PASS cone_radius_p95 >= 8 mm
+target_RCM_or_tip_constraint: max=0.538 mm, mean=0.195 mm
+  PASS target_RCM_or_tip_max <= 10 mm
+entry-side point distance from nominal entry: mean=12.075 mm, max=14.890 mm
+  Note: in Task 2 this distance is the visible entry-side cone radius, not necessarily an RCM violation.
+
+## Task4_EntryRCM_TipCone cone quality
+angle_source=cone_t4_angle_deg_geom | p95=3.498 deg | std=0.966 deg | range=3.226 deg
+  PASS cone_angle_p95 >= 3 deg
+  PASS cone_angle_std >= 0.35 deg
+radius_source=cone_t4_radius_mm_geom | p95=9.809 mm | std=2.728 mm
+  PASS cone_radius_p95 >= 8 mm
+entry_RCM_constraint: max=2.431 mm, mean=0.993 mm
+  PASS entry_RCM_max <= 10 mm
+trocar/entry slip proxy (entry_rcm_error_mm): mean=0.993 mm, max=2.431 mm
+  PASS trocar_slip_max <= 10 mm

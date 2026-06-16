@@ -1,0 +1,1 @@
+time,mode,phase,solveIK,lambda,lambda0,insertion_progress,tip_entry_error_mm,tip_target_error_mm,rcm_error_mm,weighted_error,skull_violation_mm,arm_skull_violation_mm,entry_axis_error_deg,entry_cone_violation_deg,q0_deg,q1_deg,q2_deg,q3_deg,q4_deg,q5_deg,source_file,fps_est,stage,task_inferred,total_skull_violation_mm
