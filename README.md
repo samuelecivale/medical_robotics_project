@@ -1,607 +1,367 @@
-# Multi-RCM Control for a ROSA-like Neurosurgical Robot in Unity
+# Project 4 — Multi-RCM for a ROSA-like Neurosurgical Robot
 
 ## Overview
 
-This repository contains a Unity implementation of a simplified ROSA-like robotic system for neurosurgical Remote Center of Motion (RCM) control.
+This Unity project implements a simplified but complete simulation of **Project 4 — Multi-RCM for the ROSA robot**.
 
-The project addresses **Multi-RCM for the ROSA robot**. The goal is to build a 3D and kinematic model of a ROSA-inspired manipulator and implement a double-RCM kinematic controller for neurosurgical procedures.
+The goal of the project is to reproduce, in a 3D Unity environment, the main kinematic idea behind multi-RCM control for neurosurgical robotic procedures. In the standard ROSA neurosurgical setup, the **Remote Center of Motion** is located at the skull entry point, also called the trocar or entry point. During some phases of the surgical procedure, however, it can be useful to impose a second RCM-like behavior at the deep target, allowing a small conical motion at the entry side.
 
-The surgical scenario is based on:
+The implementation provides:
 
-- an **entry point** on the skull, representing the trocar / burr-hole constraint;
-- an internal **target point** inside the skull;
-- a simplified skull model used for visualization and collision / violation monitoring;
-- a needle-like surgical tool attached to a 6-DOF serial robotic arm.
+* a procedural 6-DOF ROSA-like manipulator;
+* a replaceable Denavit-Hartenberg kinematic model;
+* a virtual surgical entry point;
+* a deep target point;
+* a needle/tool attached to the robot end-effector;
+* an entry-RCM insertion task;
+* a target-RCM conical task;
+* an entry-RCM tip-cone task;
+* keyboard controls and camera overlay;
+* real-time visualization of the robot, needle, entry point, target point and nominal entry-target line.
 
-The controller supports three main demonstration tasks:
-
-1. **Target RCM + small conical motion at the entry side**
-2. **Safe insertion sequence through the skull entry point**
-3. **Entry RCM + small conical motion of the tip around the target**
-
-The implementation focuses on showing that the robot can satisfy RCM constraints, reach the surgical target, avoid skull violations during approach/insertion, and generate visible conical motions when required by the assignment.
+The project does not use an official ROSA mesh. Instead, it builds a simplified ROSA-like 6-DOF serial manipulator procedurally in Unity. This makes the project self-contained and allows the DH parameters to be replaced later with more accurate values if a real robot model becomes available.
 
 ---
 
-## Repository structure
+## Theoretical reference
 
-Recommended structure:
+The project is inspired by the RCM formulation proposed in:
+
+**Aghakhani, Geravand, Shahriari, Vendittelli, Oriolo — “Task Control with Remote Center of Motion Constraint for Minimally Invasive Robotic Surgery”, ICRA 2013.**
+
+The central idea is to model the RCM point as a variable point lying on the tool axis. In this project, the RCM point is written as:
 
 ```text
-Assets/
-└── Scripts/
-    ├── AutoROSABuilder.cs
-    ├── DoubleRCMUnityController2.cs
-    ├── MainCameraKeyboardFreeFly.cs
-    └── CameraControlsOverlay.cs
-
-RCM_logs/
-└── *.csv
-
-analysis/
-└── analyze_rcm_logs.py
-
-README.md
+p_RCM(q, λ) = p_tool_base(q) + λ · L_tool · z_tool(q)
 ```
 
-### Main scripts
+where:
 
-| File | Purpose |
-|---|---|
-| `AutoROSABuilder.cs` | Automatically builds the ROSA-like arm, tool, skull, entry point, target point, camera and scene objects. It also attaches and configures the controller. |
-| `DoubleRCMUnityController2.cs` | Main kinematic controller. Implements Entry RCM, Target RCM, Double RCM, insertion sequence, conical motions, skull avoidance and CSV logging. |
-| `MainCameraKeyboardFreeFly.cs` | Keyboard-only free-fly camera for inspecting the scene during Play mode. |
-| `CameraControlsOverlay.cs` | Left-side overlay showing the camera controls. |
-| `analyze_rcm_logs.py` | Python script used to evaluate the generated CSV logs and produce quantitative reports and plots. |
+* `q` is the vector of robot joint variables;
+* `λ` is a scalar penetration variable;
+* `L_tool` is the needle/tool length;
+* `z_tool(q)` is the tool axis direction;
+* `p_tool_base(q)` is the base point of the tool;
+* `p_RCM(q, λ)` is the point on the needle constrained to coincide with the desired RCM.
+
+This follows the idea that the RCM point is not fixed on the tool, but can move along the tool axis as the penetration changes.
+
+The controller is implemented as an extended kinematic task:
+
+```text
+[ task velocity ]   [ J_task   0 ] [ q_dot      ]
+[ RCM velocity  ] = [ J_RCM      ] [ lambda_dot ]
+```
+
+The system is solved using a damped least-squares pseudoinverse. A null-space contribution is also used to keep the penetration variable close to a desired value and to avoid poor joint configurations.
 
 ---
 
-## Scene generation
+## Why the skull model was removed
 
-The scene is generated automatically by `AutoROSABuilder.cs`.
+An earlier version of the project included a simplified skull/no-go sphere and a skull-avoidance term. This was later removed intentionally.
 
-The generated scene contains:
+The reason is that, for the purpose of this exam project, the skull model was considered **over-engineered** with respect to the actual goal of the assignment. The project is about implementing and demonstrating **multi-RCM kinematic control**, not about developing a full anatomical collision-avoidance planner.
 
-- a simplified 6-DOF ROSA-like manipulator;
-- a black surgical shaft;
-- a red physical tool tip;
-- a red skull entry point;
-- a green internal target point;
-- a semi-transparent skull ellipsoid;
-- a controller component attached to the generated robot root;
-- a camera and lights.
+The reference paper also focuses on the mathematical and control formulation of the RCM constraint. It assumes the trocar/entry point is known and uses it as a kinematic constraint. It does not require a detailed skull model or a full collision avoidance system around the patient anatomy.
 
-Current surgical reference positions are:
+Keeping the skull introduced additional complexity that made the simulation harder to debug and less clear visually. In particular, it mixed three different problems:
+
+1. RCM constraint satisfaction;
+2. needle insertion through the trocar;
+3. collision avoidance with a simplified anatomical obstacle.
+
+For this project, the priority is to clearly show that:
+
+* the needle enters through the entry point;
+* the RCM can be imposed at the entry point;
+* the RCM can be shifted conceptually to the target point;
+* small conical motions can be generated while respecting the chosen RCM behavior.
+
+Therefore, the final version removes the skull and keeps only the geometric elements strictly needed to explain and test the double-RCM controller: the robot, the needle, the trocar/entry point, the target point and the entry-target line.
+
+This makes the simulation cleaner, more robust, and more aligned with the expected learning objectives of the project.
+
+---
+
+## Implemented tasks
+
+The simulation provides multiple task modes, selectable from the keyboard.
+
+### Task 1 — Entry-RCM with tip target
+
+The robot controls the needle so that:
+
+* the RCM point remains fixed at the entry point;
+* the needle tip moves toward the deep target.
+
+This corresponds to the standard neurosurgical insertion idea: the needle/tool must pass through the trocar while reaching the internal target.
+
+---
+
+### Task 2 — Target-RCM with conical motion at the entry side
+
+In this mode:
+
+* the needle tip stays fixed on the target;
+* the target behaves as the effective RCM;
+* a point on the entry side of the needle performs a small conical motion.
+
+This reproduces the idea described in the project statement: in some phases, it can be useful to place the RCM at the target while allowing a small conical motion at the entry side.
+
+---
+
+### Task 3 — Insertion sequence through the entry point
+
+This is the main surgical insertion sequence.
+
+The desired behavior is:
+
+```text
+needle starts from above
+→ needle aligns with the entry-target line
+→ tip passes through the entry point
+→ needle inserts toward the target
+→ RCM remains at the entry point during insertion
+```
+
+The important point is that the needle tip must enter from the trocar/entry point. The final version is tuned so that the needle does not approach the target from below or from an unrealistic direction.
+
+---
+
+### Task 4 — Entry-RCM with tip cone around the target
+
+In this mode:
+
+* the RCM remains fixed at the entry/trocar point;
+* the tip performs a small circular/conical motion around the target.
+
+This is useful to show the opposite behavior of Task 2:
+
+* Task 2: target fixed, entry side moves in a cone;
+* Task 4: entry fixed, tip moves in a cone around the target.
+
+---
+
+## Unity scene structure
+
+The scene is generated procedurally by:
+
+```text
+Project4SceneBuilder.cs
+```
+
+This script creates:
+
+* the ROSA-like robot root object;
+* the entry point marker;
+* the target point marker;
+* the nominal entry-target line;
+* lights;
+* ground plane;
+* pedestal;
+* camera.
+
+The robot controller is implemented in:
+
+```text
+ROSADoubleRCMController.cs
+```
+
+The keyboard-only free camera is implemented in:
+
+```text
+FreeFlyCameraKeyboard.cs
+```
+
+---
+
+## Main scripts
+
+### `Project4SceneBuilder.cs`
+
+This script builds the complete scene at runtime.
+
+It defines the default positions of:
 
 ```csharp
-entryPosition  = new Vector3(0.80f, 0.70f, 0.055f);
-targetPosition = new Vector3(0.865f, 0.585f, 0.055f);
-
-skullCenterOffsetFromEntry = new Vector3(0.060f, -0.135f, 0.025f);
-initialSkullClearanceMm = 18.0f;
+entryPoint
+targetPoint
+robot.position
 ```
 
-The target is intentionally placed inside the skull, while the entry point represents the external trocar / skull entry constraint.
+These values can be changed in the Inspector or directly in the script.
+
+The current version has the skull disabled:
+
+```csharp
+createSkull = false;
+```
+
+This is intentional and part of the final project scope.
 
 ---
 
-## Unity setup
+### `ROSADoubleRCMController.cs`
 
-1. Create or open the Unity project.
-2. Put the scripts inside:
+This is the main controller.
+
+It contains:
+
+* DH parameters;
+* forward kinematics;
+* numerical Jacobian computation;
+* damped least-squares inverse kinematics;
+* RCM point computation;
+* insertion logic;
+* target-RCM task;
+* entry-RCM task;
+* conical motion generation;
+* overlay information;
+* CSV logging.
+
+The DH table is intentionally simple and replaceable. The robot is not meant to be an exact ROSA replica, but a plausible 6-DOF ROSA-like manipulator suitable for demonstrating the control strategy.
+
+---
+
+### `FreeFlyCameraKeyboard.cs`
+
+This script controls the camera using only the keyboard and draws a small overlay with the available camera commands.
+
+Controls:
+
+```text
+W / S          forward / backward
+A / D          left / right
+Q / E          down / up
+Arrow left/right   yaw
+Arrow up/down      pitch
+Shift          faster movement
+Ctrl           slower movement
+F              reset camera
+H              show/hide camera overlay
+```
+
+---
+
+## Keyboard controls
+
+Robot/task controls:
+
+```text
+1      Entry-RCM + tip target
+2      Target-RCM + entry-side cone
+3      Insertion sequence
+4      Entry-RCM + tip cone around target
+0      Hold
+Space  Pause / resume controller
+C      Enable / disable cone animation
+R      Reset robot state
+L      Enable / disable CSV logging
+```
+
+Camera controls:
+
+```text
+W/S    Move forward/backward
+A/D    Move left/right
+Q/E    Move down/up
+Arrows Rotate camera
+Shift  Move faster
+Ctrl   Move slower
+F      Reset camera
+H      Toggle camera overlay
+```
+
+---
+
+## Setup instructions
+
+1. Create a new Unity 3D project.
+2. Copy the scripts into:
 
 ```text
 Assets/Scripts/
 ```
 
-3. Create an empty GameObject in the scene, for example:
-
-```text
-ROSA_Builder
-```
-
+3. Create an empty GameObject in the scene.
 4. Attach:
 
 ```text
-AutoROSABuilder.cs
+Project4SceneBuilder.cs
 ```
 
-5. Enable:
+5. Press Play.
+
+The scene should be generated automatically.
+
+If the keyboard controls do not work, check:
 
 ```text
-Build On Start = true
-Rebuild Every Start = true
-Add Controller = true
+Edit > Project Settings > Player > Active Input Handling
 ```
 
-6. Press Play.
+Set it to either:
 
-The ROSA-like robot, tool, skull, entry point and target point should be created automatically.
+```text
+Both
+```
+
+or:
+
+```text
+Input Manager (Old)
+```
+
+because the scripts use Unity’s old `Input.GetKey` API.
 
 ---
 
-## Important Unity note: avoid duplicate scripts
+## Notes about coordinate frames
 
-Unity compiles every `.cs` file inside `Assets/`.
+Unity uses a **Y-up** world frame, while the DH convention usually assumes the robot vertical axis along **Z**.
 
-Do not keep old versions of the same scripts inside folders such as:
+For this reason, the robot root is rotated so that the DH vertical axis is mapped consistently into Unity’s vertical direction.
 
-```text
-Assets/Scripts/old/
-Assets/Scripts/backup/
-Assets/Scripts/task_3_funziona_2_4_no/
-```
-
-If Unity finds two files containing the same class name, for example:
-
-```csharp
-public class AutoROSABuilder : MonoBehaviour
-public class DoubleRCMUnityController2 : MonoBehaviour
-```
-
-it will generate duplicate-definition errors.
-
-To keep old files, move them outside `Assets/`, for example:
-
-```text
-_script_backups/
-```
-
-or rename them from `.cs` to `.txt`.
+This is important because otherwise the robot would visually develop along the horizontal plane instead of standing upright.
 
 ---
 
-## Camera controls
+## Current limitations
 
-The project includes a keyboard-only free-fly camera.
+This project is a simplified academic simulation. It is not a clinically accurate surgical simulator.
 
-Attach this script to the Main Camera:
+Main limitations:
 
-```text
-MainCameraKeyboardFreeFly.cs
-```
+* the robot is ROSA-like, not an exact ROSA CAD model;
+* the DH parameters are plausible but not official;
+* the needle is modeled as a simple rigid cylinder;
+* the skull/anatomical model is intentionally removed;
+* no force control is implemented;
+* no real collision detection is used;
+* the controller is purely kinematic;
+* Jacobians are computed numerically for simplicity.
 
-Recommended camera settings:
-
-```text
-Projection = Perspective
-Field of View = 50
-Near Clip Plane = 0.01
-Far Clip Plane = 100
-```
-
-Controls:
-
-```text
-W / S              forward / backward
-A / D              left / right
-Q / E              down / up
-Arrow Left/Right   yaw left / right
-Arrow Up/Down      look up / down
-Shift              faster movement
-Ctrl               slower movement
-F                  reset view
-```
-
-The camera controls can also be displayed using:
-
-```text
-CameraControlsOverlay.cs
-```
-
-Attach it to the Main Camera or to any active GameObject in the scene.
+These limitations are acceptable for the purpose of the project, because the focus is the implementation and visualization of double-RCM kinematic control.
 
 ---
 
-## Controller controls
+## Final design choice
 
-During Play mode, the main controller supports the following keyboard shortcuts:
-
-```text
-2      Target RCM + entry-side cone
-3      Safe insertion sequence
-4      Entry RCM + tip cone around target
-C      Toggle target-cone animation
-R      Reset robot pose
-Space  Pause / resume IK solving
-H      Show / hide controller overlay
-```
-
----
-
-## Implemented demonstration tasks
-
-
-### Task 2 — Target RCM + conical motion at entry side
-
-The target point is treated as the RCM.  
-The shaft is allowed to perform a small conical motion on the entry side.
-
-Main objective:
+The final version focuses on the core objective of the assignment:
 
 ```text
-Keep the internal target fixed as RCM while showing a small visible cone at the entry/trocar side.
+implement a 3D and kinematic model of a ROSA-like robot in Unity
+and demonstrate double-RCM behavior through kinematic control.
 ```
 
-Important note:
+The skull was removed because it made the simulation unnecessarily complex and less readable for the exam. The final scene is therefore simpler, but better aligned with the theoretical contribution of the reference paper and with the learning objectives of the project.
 
-In this task, the entry-side point is intentionally moving inside a cone. Therefore, the entry-side distance from the nominal entry point should not be interpreted as a failure of the entry RCM. The active RCM constraint in this task is the target point.
+The key result is that the simulation clearly shows:
 
-Current configuration:
+* standard entry-point RCM;
+* insertion through the trocar;
+* target-side RCM behavior;
+* conical motion around the selected RCM;
+* a replaceable kinematic model suitable for future refinement.
 
-```csharp
-controller.targetModeTargetRCMWeight = 5.5f;
-controller.targetModeEntryConeWeight = 1.6f;
-
-controller.useEntryConeInTargetMode = true;
-controller.animateTargetConeDemo = true;
-
-controller.entryConeHalfAngleDeg = 7.0f;
-controller.entryConeMotionFraction = 0.75f;
-controller.entryConeFrequencyHz = 0.18f;
-```
-
----
-
-### Task 3 — Safe insertion sequence
-
-The insertion sequence is divided into phases:
-
-```text
-ApproachEntry
-InsertToTarget
-Done
-```
-
-The controller first moves the tool toward a pre-entry pose, then aligns the shaft with the entry-target direction, and finally inserts the tool toward the target while maintaining the trocar RCM.
-
-Main objective:
-
-```text
-Reach the internal target through the skull entry point with zero skull violation.
-```
-
-The controller uses:
-
-- pre-entry approach;
-- alignment gate before insertion;
-- entry RCM preservation during insertion;
-- target reaching;
-- needle/skull avoidance;
-- arm/skull avoidance;
-- hard skull safety backtracking;
-- phase-specific speed limits for smoother approach.
-
-Current relevant configuration:
-
-```csharp
-controller.useInsertionSequence = true;
-controller.useProgressiveStraightInsertion = true;
-
-controller.preEntryDistanceMm = 135.0f;
-controller.preEntryReachedThresholdMm = 12.0f;
-controller.insertionStartAxisThresholdDeg = 5.0f;
-controller.insertionStartAxisDistanceThresholdMm = 4.0f;
-
-controller.requireAlignedPoseBeforeInsertion = true;
-
-controller.enforceZeroSkullViolation = true;
-controller.hardSkullSafetyMargin = 0.0f;
-controller.hardSafetyBacktrackingSteps = 6;
-controller.hardSafetyToleranceMm = 0.0f;
-```
-
----
-
-### Task 4 — Entry RCM + tip cone around target
-
-The entry point is treated as the trocar RCM.  
-The physical tip moves around the internal target with a small conical motion.
-
-Main objective:
-
-```text
-Keep the entry/trocar point fixed while the tool tip performs a small visible cone around the target.
-```
-
-Current configuration:
-
-```csharp
-controller.entryTipConeRCMWeight = 5.8f;
-controller.entryTipConeTipWeight = 2.4f;
-controller.entryTipConeAxisWeight = 1.0f;
-
-controller.useTipConeAroundTargetMode = true;
-
-controller.tipConeHalfAngleDeg = 4.0f;
-controller.tipConeMotionFraction = 0.85f;
-controller.tipConeFrequencyHz = 0.18f;
-```
-
-The cone was intentionally kept small to preserve the entry RCM and keep the target-side distance below approximately 10 mm while still remaining visible.
-
----
-
-## CSV logging
-
-CSV logging is implemented inside `DoubleRCMUnityController2.cs`.
-
-Recommended settings:
-
-```csharp
-controller.logToCsv = true;
-controller.useTimestampedLogFile = true;
-controller.logEverySeconds = 0.02f;
-```
-
-Logs are saved in:
-
-```text
-RCM_logs/
-```
-
-Each CSV contains time series data such as:
-
-```text
-time
-dt
-fps
-mode
-phase
-tip_entry_error_mm
-entry_rcm_error_mm
-target_rcm_or_tip_error_mm
-final_target_tip_error_mm
-insertion_intermediate_error_mm
-entry_cone_angle_deg
-entry_cone_violation_deg
-skull_violation_mm
-arm_skull_violation_mm
-total_skull_violation_mm
-entry_lambda
-target_lambda
-tool position
-tip position
-entry position
-target position
-joint angles
-```
-
----
-
-## Quantitative evaluation
-
-The project can be evaluated using:
-
-```text
-analyze_rcm_logs.py
-```
-
-Example command:
-
-```bash
-python3 analyze_rcm_logs.py RCM_logs/*.csv \
-  --out rcm_analysis \
-  --entry-max-mm 10 \
-  --target-max-mm 10 \
-  --final-target-max-mm 8 \
-  --skull-max-mm 0 \
-  --min-fps 30 \
-  --cone-min-angle-deg 3 \
-  --cone-min-radius-mm 8
-```
-
-The script generates:
-
-```text
-rcm_analysis/
-├── rcm_analysis_report.txt
-├── rcm_summary_by_task_phase.csv
-├── *_derived.csv
-├── *_errors_time.png
-├── *_skull_violation_time.png
-├── *_fps_time.png
-├── *_cone_angle_time.png
-├── *_cone_radius_time.png
-├── *_smoothness_time.png
-├── *_Task2_TargetRCM_EntryCone_cone_plane.png
-└── *_Task4_EntryRCM_TipCone_cone_plane.png
-```
-
----
-
-## Recommended evaluation procedure
-
-Before each evaluation, clear old logs:
-
-```bash
-mkdir -p RCM_logs_old
-mv RCM_logs/*.csv RCM_logs_old/
-```
-
-Then run the simulation:
-
-```text
-Play
-Press 2 and record for about 25 seconds
-Press 3 and wait until Done
-Press 4 and record for about 25 seconds
-Stop
-```
-
-Then run:
-
-```bash
-rm -rf rcm_analysis
-
-python3 analyze_rcm_logs.py RCM_logs/*.csv \
-  --out rcm_analysis \
-  --entry-max-mm 10 \
-  --target-max-mm 10 \
-  --final-target-max-mm 8 \
-  --skull-max-mm 0 \
-  --min-fps 30 \
-  --cone-min-angle-deg 3 \
-  --cone-min-radius-mm 8
-```
-
-Open the report:
-
-```bash
-open rcm_analysis/rcm_analysis_report.txt
-```
-
----
-
-## Acceptance criteria
-
-Recommended quantitative thresholds:
-
-| Metric | Acceptance threshold |
-|---|---:|
-| Entry RCM max error, when entry is the active RCM | < 10 mm |
-| Target RCM max error, when target is the active RCM | < 10 mm |
-| Final target error in insertion | < 8 mm |
-| Skull violation | 0 mm |
-| Arm-skull violation | 0 mm |
-| FPS p05 | > 30 FPS |
-| Cone angle p95 in Task 2 / Task 4 | > 3 deg |
-| Cone radius p95 in Task 2 / Task 4 | > 8 mm |
-
-Task-specific interpretation:
-
-### Task 2
-
-Passes if:
-
-```text
-target RCM error < 10 mm
-entry-side cone angle p95 > 3 deg
-entry-side cone radius p95 > 8 mm
-skull violation = 0 mm
-```
-
-The entry-side distance from the nominal entry point is expected because Task 2 intentionally demonstrates a cone on the entry side.
-
-### Task 3
-
-Passes if:
-
-```text
-final target error < 8 mm
-entry RCM final / p95 during insertion < 10 mm
-skull violation = 0 mm
-arm skull violation = 0 mm
-phase reaches Done
-```
-
-Large raw max errors during task switching should be treated as transients and evaluated separately from the steady-state insertion phase.
-
-### Task 4
-
-Passes if:
-
-```text
-entry RCM error < 10 mm
-tip cone angle p95 > 3 deg
-tip cone radius p95 > 8 mm
-skull violation = 0 mm
-```
-
-The final target-tip distance is not necessarily a failure in Task 4, because the tip is intentionally moving around the target on a cone.
-
----
-
-## Latest measured results
-
-Using the current configuration, the latest log analysis produced the following relevant results.
-
-### Task 2 — Target RCM + entry-side cone
-
-```text
-target_rcm_or_tip_error max ≈ 0.538 mm
-cone angle p95 ≈ 5.280 deg
-cone radius p95 ≈ 14.839 mm
-skull violation max = 0 mm
-```
-
-Interpretation:
-
-```text
-Task 2 passes.
-The target RCM is very accurate and the entry-side conical motion is clearly visible.
-```
-
-### Task 3 — Safe insertion
-
-```text
-final target error ≈ 2.180 mm
-entry RCM final error ≈ 1.010 mm
-skull violation max = 0 mm
-arm skull violation max = 0 mm
-```
-
-Interpretation:
-
-```text
-Task 3 passes.
-The tool reaches the internal target with zero skull violation.
-The large raw maximum errors in the report are task-switching / initialization transients, not the final insertion behavior.
-```
-
-### Task 4 — Entry RCM + tip cone
-
-```text
-entry RCM max error ≈ 2.431 mm
-tip cone angle p95 ≈ 3.498 deg
-tip cone radius p95 ≈ 9.809 mm
-skull violation max = 0 mm
-```
-
-Interpretation:
-
-```text
-Task 4 passes.
-The trocar remains stable and the conical motion remains visible while staying smaller than the previous 13 mm radius.
-```
-
----
-
-## Known limitations
-
-1. **Simplified ROSA geometry**
-
-The robot is ROSA-inspired, not a manufacturer-accurate mechanical replica. The project focuses on kinematic behavior and RCM control rather than CAD-level fidelity.
-
-2. **Numerical IK**
-
-The controller uses numerical damped least-squares IK. This makes the implementation flexible but can create transient spikes during task switching or reinitialization.
-
-3. **Task-switching transients**
-
-Some CSV reports show large max errors immediately after switching between tasks. These should be separated from steady-state performance by evaluating each task independently or by discarding the first seconds after a mode change.
-
-4. **Simplified skull model**
-
-The skull is represented as an ellipsoid-like collider/visual object. This is sufficient for collision and violation monitoring in the project, but it is not patient-specific anatomy.
-
-5. **Visual cone vs clinical motion**
-
-The conical motions in Task 2 and Task 4 are deliberately tuned to be visible in Unity while keeping the RCM error bounded. They are demonstration motions rather than clinically optimized trajectories.
-
----
-
-## Conclusion
-
-The project satisfies the main requirements of Project 4:
-
-- it builds a 3D and kinematic ROSA-like robot model in Unity;
-- it implements entry RCM and target RCM constraints;
-- it demonstrates double-RCM behavior through kinematic control;
-- it performs a safe insertion sequence through the skull entry point;
-- it supports target-RCM and entry-RCM conical motion demonstrations;
-- it logs quantitative CSV data for objective evaluation;
-- it achieves zero skull violation in the tested runs;
-- it keeps the trocar stable during the active entry-RCM tasks.
-
-Overall, the implementation provides both a visual Unity demonstration and a quantitative evaluation pipeline for assessing Multi-RCM behavior in a simplified ROSA neurosurgical scenario.
