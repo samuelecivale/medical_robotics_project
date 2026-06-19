@@ -1,8 +1,10 @@
 check,samples,metric,value_max,threshold,passed
-T2 cone tracking,945,task2_entry_cone_error_mm,25.999,50.0,True
-T2 tip fixed at target,945,tip_target_error_mm,14.627,25.0,True
-T3 insertion entry RCM,211,entry_rcm_error_mm,9.235,10.0,True
-T3 final target,38,tip_target_error_mm,13.792,25.0,True
-T3 skull/corridor safety,357,skull_violation_mm,0.0,0.0,True
-T4 entry RCM stability,664,entry_rcm_error_mm,13.781,10.0,False
-T4 tip cone tracking,664,task4_tip_cone_error_mm,29.882,50.0,True
+T1 entry RCM stability,61,entry_rcm_error_mm,0.013,10.0,True
+T1 tip reaches target,61,tip_target_error_mm,0.245,25.0,True
+T2 cone tracking,551,task2_entry_cone_error_mm,25.472,50.0,True
+T2 tip fixed at target,551,tip_target_error_mm,14.299,25.0,True
+T3 insertion entry RCM,321,entry_rcm_error_mm,8.893,10.0,True
+T3 final target,155,tip_target_error_mm,14.206,25.0,True
+T3 skull/corridor safety,466,skull_violation_mm,0.0,0.0,True
+T4 entry RCM stability,634,entry_rcm_error_mm,9.033,10.0,True
+T4 tip cone tracking,634,task4_tip_cone_error_mm,27.695,50.0,True

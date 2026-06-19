@@ -66,6 +66,8 @@ public class Project4SceneBuilder : MonoBehaviour
         ctrl.mode = ROSADoubleRCMController.RCMMode.InsertionSequence;
         ctrl.autoRun = true;
         ctrl.showOverlay = true;
+        ctrl.writeCsvLog = true;
+        ctrl.logPeriod = 0.05f;
         ctrl.buildRobotVisualsOnStart = true;
 
         CreateLightRig();

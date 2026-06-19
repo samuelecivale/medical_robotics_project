@@ -78,14 +78,14 @@ public class ROSADoubleRCMController : MonoBehaviour
     public bool autoRun = true;
 
     [Header("Control gains")]
-    public float tipGain = 4.0f;
-    public float rcmGain = 9.0f;
-    public float coneGain = 4.5f;
+    public float tipGain = 3.5f;
+    public float rcmGain = 17.0f;
+    public float coneGain = 6.0f;
     public float lambdaNullGain = 0.9f;
     public float jointLimitNullGain = 0.08f;
     public float skullAvoidanceNullGain = 1.3f;
     public float nullspaceScale = 0.55f;
-    public float damping = 0.060f;
+    public float damping = 0.055f;
     public float maxJointSpeedDeg = 80f;
     public float maxLambdaSpeed = 0.55f;
 
@@ -94,30 +94,38 @@ public class ROSADoubleRCMController : MonoBehaviour
     public float outsideEntryDistance = 0.10f;
     [Tooltip("Deprecated fallback. The new sequence enters through the trocar first, then advances toward the target.")]
     public float initialInsertionDepth = 0.00f;
-    public float insertionProgressSpeed = 0.20f;
+    public float insertionProgressSpeed = 0.10f;
     public float insertionStartErrorThreshold = 0.030f;
     [Tooltip("Tool parameter used as an extra guide point to keep the whole needle aligned with the entry-target line during insertion.")]
     [Range(0.15f, 0.95f)] public float insertionAxisGuideS = 0.72f;
-    public float insertionAxisGain = 3.0f;
+    public float insertionAxisGain = 2.0f;
     [Range(0f, 1f)] public float insertionProgress = 0f;
 
     [Header("Target-RCM cone")]
-    public float coneHalfAngleDeg = 6.0f;
-    public float coneAngularSpeedDeg = 22.0f;
+    public float coneHalfAngleDeg = 4.5f;
+    public float coneAngularSpeedDeg = 12.0f;
     [Tooltip("Radius used in task 4 when the tip traces a circle around the deep target while the needle keeps the entry RCM.")]
-    public float tipTargetConeRadius = 0.045f;
+    public float tipTargetConeRadius = 0.035f;
     public bool animateCone = true;
     public float entrySidePointSafetyOffset = 0.0f;
 
     [Header("Safety / avoidance")]
     public float skullSafetyMargin = 0.035f;
     public float allowedNeedleCorridorRadius = 0.035f;
-    public bool useSkullAvoidance = false;
+    public bool useSkullAvoidance = true;
+
+    [Header("Task transition")]
+    public float coneWarmupTime = 1.5f;
+
+    private RCMMode previousModeForTiming;
+    private float modeChangedAt;
 
     [Header("Debug / overlay / logging")]
     public bool showOverlay = true;
-    public bool writeCsvLog = false;
-    public float logPeriod = 0.1f;
+    public bool writeCsvLog = true;
+    [Tooltip("CSV sampling period. 0.05 s gives about 20 Hz, enough for clean presentation plots without huge files.")]
+    public float logPeriod = 0.05f;
+    public bool logPresentationMetrics = true;
 
     private readonly List<GameObject> jointSpheres = new List<GameObject>();
     private readonly List<GameObject> linkCylinders = new List<GameObject>();
@@ -136,6 +144,7 @@ public class ROSADoubleRCMController : MonoBehaviour
     private Material lineMat;
 
     private string csvPath;
+    private StreamWriter csvWriter;
     private float logTimer;
     private double[] lastXdot = new double[7];
     private Vector3 lastTip;
@@ -164,15 +173,37 @@ public class ROSADoubleRCMController : MonoBehaviour
         if (buildRobotVisualsOnStart) BuildVisualRobot();
         ResetControllerState(false);
         if (writeCsvLog) StartLogging();
+        previousModeForTiming = mode;
+        modeChangedAt = Time.time;
     }
 
     private void Update()
     {
         HandleKeyboard();
+        if (mode != previousModeForTiming)
+        {
+            previousModeForTiming = mode;
+            modeChangedAt = Time.time;
+        }
         if (autoRun && mode != RCMMode.Hold)
             StepController(Time.deltaTime);
         UpdateVisualRobot();
         if (writeCsvLog) AppendLogIfNeeded(Time.deltaTime);
+    }
+
+    private float ConeLocalTime()
+    {
+        return Mathf.Max(0f, Time.time - modeChangedAt - coneWarmupTime);
+    }
+
+    private void OnDisable()
+    {
+        StopLogging();
+    }
+
+    private void OnApplicationQuit()
+    {
+        StopLogging();
     }
 
     public void SetDefaultDH()
@@ -225,6 +256,7 @@ public class ROSADoubleRCMController : MonoBehaviour
         {
             writeCsvLog = !writeCsvLog;
             if (writeCsvLog) StartLogging();
+            else StopLogging();
         }
     }
 
@@ -320,7 +352,7 @@ public class ROSADoubleRCMController : MonoBehaviour
             tasks.Add(new PointTask(ToolTip, DesiredTipConeAroundTarget(), tipGain, 0.12f));
             tasks.Add(new PointTask(RCMPoint, entry, rcmGain, 0.06f));
         }
-        else if (mode == RCMMode.InsertionSequence)
+        /*else if (mode == RCMMode.InsertionSequence)
         {
             // Task 3 is now a true entry-through-trocar sequence:
             // 1) stay above/outside the entry while aligning the needle axis with entry-target,
@@ -334,6 +366,43 @@ public class ROSADoubleRCMController : MonoBehaviour
 
             if (insertionPhase == InsertionPhase.InsertToTarget || insertionPhase == InsertionPhase.Done)
                 tasks.Add(new PointTask(RCMPoint, entry, rcmGain, 0.060f));
+        }
+        */
+        else if (mode == RCMMode.InsertionSequence)
+        {
+            Vector3 desiredTip = CurrentDesiredInsertionTip();
+
+            float phaseTipGain = tipGain;
+            float phaseAxisGain = insertionAxisGain;
+            float phaseRcmGain = rcmGain;
+
+            if (insertionPhase == InsertionPhase.InsertToTarget || insertionPhase == InsertionPhase.Done)
+            {
+                // Durante l'inserzione vera, il fulcro RCM deve essere più importante
+                // della velocità con cui la punta raggiunge il target.
+                phaseTipGain = tipGain * 0.85f;
+                phaseAxisGain = insertionAxisGain * 0.65f;
+                phaseRcmGain = rcmGain * 1.6f;
+            }
+
+            tasks.Add(new PointTask(ToolTip, desiredTip, phaseTipGain, 0.10f));
+            tasks.Add(new PointTask(
+                InsertionAxisGuidePoint,
+                DesiredInsertionAxisGuidePoint(desiredTip),
+                phaseAxisGain,
+                0.10f
+            ));
+
+            // Poco prima di finire PierceEntry, inizia già a stabilizzare il trocar.
+            if (insertionPhase == InsertionPhase.PierceEntry && insertionProgress > 0.80f)
+            {
+                tasks.Add(new PointTask(RCMPoint, entry, rcmGain * 0.75f, 0.045f));
+            }
+
+            if (insertionPhase == InsertionPhase.InsertToTarget || insertionPhase == InsertionPhase.Done)
+            {
+                tasks.Add(new PointTask(RCMPoint, entry, phaseRcmGain, 0.035f));
+            }
         }
 
         return tasks;
@@ -634,7 +703,7 @@ public class ROSADoubleRCMController : MonoBehaviour
         if (b1.sqrMagnitude < 1e-6f) b1 = Vector3.Cross(axis, Vector3.right);
         b1.Normalize();
         Vector3 b2 = Vector3.Cross(axis, b1).normalized;
-        float angle = animateCone ? Time.time * coneAngularSpeedDeg * Mathf.Deg2Rad : 0f;
+        float angle = animateCone ? ConeLocalTime() * coneAngularSpeedDeg * Mathf.Deg2Rad : 0f;
         return entry + radius * (Mathf.Cos(angle) * b1 + Mathf.Sin(angle) * b2);
     }
 
@@ -650,7 +719,7 @@ public class ROSADoubleRCMController : MonoBehaviour
         if (b1.sqrMagnitude < 1e-6f) b1 = Vector3.Cross(axis, Vector3.right);
         b1.Normalize();
         Vector3 b2 = Vector3.Cross(axis, b1).normalized;
-        float angle = animateCone ? Time.time * coneAngularSpeedDeg * Mathf.Deg2Rad : 0f;
+        float angle = animateCone ? ConeLocalTime() * coneAngularSpeedDeg * Mathf.Deg2Rad : 0f;
         return target + radius * (Mathf.Cos(angle) * b1 + Mathf.Sin(angle) * b2);
     }
 
@@ -1047,14 +1116,124 @@ public class ROSADoubleRCMController : MonoBehaviour
 
     // ---------- Logging and overlay ----------
 
+    private string ActiveTaskLabel()
+    {
+        if (mode == RCMMode.EntryRCM_TipTarget) return "T1_entry_rcm_tip_target";
+        if (mode == RCMMode.TargetRCM_EntryCone) return "T2_target_rcm_entry_cone";
+        if (mode == RCMMode.InsertionSequence) return "T3_safe_insertion";
+        if (mode == RCMMode.EntryRCM_TipConeAroundTarget) return "T4_entry_rcm_tip_cone";
+        return "Hold";
+    }
+
+    private float PointToSegmentDistance(Vector3 p, Vector3 a, Vector3 b)
+    {
+        Vector3 ab = b - a;
+        float len2 = ab.sqrMagnitude;
+        if (len2 < 1e-8f) return Vector3.Distance(p, a);
+        float t = Mathf.Clamp01(Vector3.Dot(p - a, ab) / len2);
+        Vector3 c = a + t * ab;
+        return Vector3.Distance(p, c);
+    }
+
+    private float ComputeMaxToolLineDistance(float[] q)
+    {
+        Vector3 entry = EntryPosition();
+        Vector3 target = TargetPosition();
+        Vector3 baseP = ToolBase(q);
+        Vector3 tip = ToolTip(q);
+        float maxDist = 0f;
+        for (int k = 0; k <= 24; ++k)
+        {
+            Vector3 p = Vector3.Lerp(baseP, tip, k / 24.0f);
+            maxDist = Mathf.Max(maxDist, PointToSegmentDistance(p, entry, target));
+        }
+        return maxDist;
+    }
+
+    private float ComputeToolAxisAngleDeg(float[] q)
+    {
+        Vector3 surgicalAxis = SafeDirection(EntryPosition(), TargetPosition());
+        Vector3 toolAxis = ToolAxis(q);
+        return Vector3.Angle(toolAxis, surgicalAxis);
+    }
+
+    private float ActiveTaskErrorMm(float tipErr, float entryErr, float targetErr, float task2ConeErr, float task4ConeErr)
+    {
+        if (mode == RCMMode.EntryRCM_TipTarget) return Mathf.Max(tipErr, entryErr);
+        if (mode == RCMMode.TargetRCM_EntryCone) return Mathf.Max(tipErr, task2ConeErr);
+        if (mode == RCMMode.InsertionSequence)
+        {
+            if (insertionPhase == InsertionPhase.InsertToTarget || insertionPhase == InsertionPhase.Done)
+                return Mathf.Max(tipErr, entryErr);
+            return tipErr;
+        }
+        if (mode == RCMMode.EntryRCM_TipConeAroundTarget) return Mathf.Max(entryErr, task4ConeErr);
+        return 0f;
+    }
+
     public void StartLogging()
     {
+        StopLogging();
+
         string dir = Path.Combine(Application.dataPath, "..", "RCM_logs");
         Directory.CreateDirectory(dir);
         csvPath = Path.Combine(dir, "project4_multircm_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".csv");
-        string header = "time_s,mode,phase,lambda,tip_error_mm,entry_rcm_error_mm,target_rcm_error_mm,cone_error_mm,skull_violation_mm,qdot_norm,lambdadot\n";
-        File.WriteAllText(csvPath, header);
-        Debug.Log("RCM CSV log saved to: " + csvPath);
+
+        // FileShare.ReadWrite lets you inspect/copy the CSV while Unity is still running.
+        FileStream fs = new FileStream(csvPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+        csvWriter = new StreamWriter(fs, Encoding.UTF8);
+        csvWriter.AutoFlush = true;
+        logTimer = 0f;
+
+        // Presentation-oriented CSV: one row = one sampled controller state.
+        // It contains both raw state variables and already-computed errors in millimetres,
+        // so the Python script can generate clean plots and slide-ready tables directly.
+        string header =
+            "time_s,dt_s,fps,task,mode,phase,insertion_progress,lambda," +
+            "tip_x,tip_y,tip_z,rcm_x,rcm_y,rcm_z,entry_side_x,entry_side_y,entry_side_z," +
+            "desired_tip_x,desired_tip_y,desired_tip_z,desired_entry_cone_x,desired_entry_cone_y,desired_entry_cone_z,desired_tip_cone_x,desired_tip_cone_y,desired_tip_cone_z," +
+            "entry_x,entry_y,entry_z,target_x,target_y,target_z," +
+            "tip_target_error_mm,entry_rcm_error_mm,target_rcm_error_mm,task2_entry_cone_error_mm,task4_tip_cone_error_mm,active_task_error_mm," +
+            "tip_line_distance_mm,shaft_line_max_distance_mm,tool_axis_angle_deg,skull_violation_mm," +
+            "qdot_norm_rad_s,lambdadot,q1_deg,q2_deg,q3_deg,q4_deg,q5_deg,q6_deg,q1dot_deg_s,q2dot_deg_s,q3dot_deg_s,q4dot_deg_s,q5dot_deg_s,q6dot_deg_s," +
+            "entry_rcm_ok_10mm,tip_target_ok_25mm,skull_ok_0mm";
+        csvWriter.WriteLine(header);
+        Debug.Log("RCM presentation CSV log saved to: " + csvPath);
+    }
+
+    public void StopLogging()
+    {
+        if (csvWriter != null)
+        {
+            csvWriter.Flush();
+            csvWriter.Close();
+            csvWriter = null;
+        }
+    }
+
+    private void AppendCsv(StringBuilder sb, string value)
+    {
+        sb.Append(value);
+        sb.Append(',');
+    }
+
+    private void AppendCsv(StringBuilder sb, float value, string format = "F3")
+    {
+        sb.AppendFormat(System.Globalization.CultureInfo.InvariantCulture, "{0:" + format + "}", value);
+        sb.Append(',');
+    }
+
+    private void AppendCsv(StringBuilder sb, double value, string format = "F5")
+    {
+        sb.AppendFormat(System.Globalization.CultureInfo.InvariantCulture, "{0:" + format + "}", value);
+        sb.Append(',');
+    }
+
+    private void AppendCsvVec(StringBuilder sb, Vector3 v)
+    {
+        AppendCsv(sb, v.x, "F5");
+        AppendCsv(sb, v.y, "F5");
+        AppendCsv(sb, v.z, "F5");
     }
 
     private void AppendLogIfNeeded(float dt)
@@ -1064,23 +1243,71 @@ public class ROSADoubleRCMController : MonoBehaviour
         if (logTimer < logPeriod) return;
         logTimer = 0f;
 
+        float[] q = GetQRad();
         Vector3 tip = lastTip;
         Vector3 entry = EntryPosition();
         Vector3 target = TargetPosition();
         Vector3 rcm = lastRCM;
+        Vector3 desiredTip = mode == RCMMode.InsertionSequence ? CurrentDesiredInsertionTip() : target;
+
         float tipErr = Vector3.Distance(tip, target) * 1000f;
         float entryErr = Vector3.Distance(rcm, entry) * 1000f;
         float targetErr = Vector3.Distance(rcm, target) * 1000f;
-        float coneErr = mode == RCMMode.EntryRCM_TipConeAroundTarget
-            ? Vector3.Distance(lastTip, lastTipConeDesired) * 1000f
-            : Vector3.Distance(lastEntrySide, lastConeDesired) * 1000f;
+        float task2ConeErr = Vector3.Distance(lastEntrySide, lastConeDesired) * 1000f;
+        float task4ConeErr = Vector3.Distance(lastTip, lastTipConeDesired) * 1000f;
+        float activeErr = ActiveTaskErrorMm(tipErr, entryErr, targetErr, task2ConeErr, task4ConeErr);
+        float tipLineDistance = PointToSegmentDistance(tip, entry, target) * 1000f;
+        float shaftLineMaxDistance = ComputeMaxToolLineDistance(q) * 1000f;
+        float toolAxisAngle = ComputeToolAxisAngleDeg(q);
+
         double qdotNorm = 0.0;
         for (int i = 0; i < N; ++i) qdotNorm += lastXdot[i] * lastXdot[i];
         qdotNorm = Math.Sqrt(qdotNorm);
-        string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "{0:F4},{1},{2},{3:F5},{4:F3},{5:F3},{6:F3},{7:F3},{8:F3},{9:F5},{10:F5}\n",
-            Time.time, mode, insertionPhase, lambda, tipErr, entryErr, targetErr, coneErr, lastSkullViolation, qdotNorm, lastXdot[6]);
-        File.AppendAllText(csvPath, line);
+
+        float safeDt = Mathf.Max(dt, 1e-5f);
+        StringBuilder sb = new StringBuilder(1024);
+        AppendCsv(sb, Time.time, "F4");
+        AppendCsv(sb, safeDt, "F5");
+        AppendCsv(sb, 1.0f / safeDt, "F2");
+        AppendCsv(sb, ActiveTaskLabel());
+        AppendCsv(sb, mode.ToString());
+        AppendCsv(sb, insertionPhase.ToString());
+        AppendCsv(sb, insertionProgress, "F4");
+        AppendCsv(sb, lambda, "F5");
+
+        AppendCsvVec(sb, tip);
+        AppendCsvVec(sb, rcm);
+        AppendCsvVec(sb, lastEntrySide);
+        AppendCsvVec(sb, desiredTip);
+        AppendCsvVec(sb, lastConeDesired);
+        AppendCsvVec(sb, lastTipConeDesired);
+        AppendCsvVec(sb, entry);
+        AppendCsvVec(sb, target);
+
+        AppendCsv(sb, tipErr, "F3");
+        AppendCsv(sb, entryErr, "F3");
+        AppendCsv(sb, targetErr, "F3");
+        AppendCsv(sb, task2ConeErr, "F3");
+        AppendCsv(sb, task4ConeErr, "F3");
+        AppendCsv(sb, activeErr, "F3");
+        AppendCsv(sb, tipLineDistance, "F3");
+        AppendCsv(sb, shaftLineMaxDistance, "F3");
+        AppendCsv(sb, toolAxisAngle, "F3");
+        AppendCsv(sb, lastSkullViolation, "F3");
+        AppendCsv(sb, qdotNorm, "F5");
+        AppendCsv(sb, lastXdot[6], "F5");
+
+        for (int i = 0; i < N; ++i) AppendCsv(sb, qDeg[i], "F3");
+        for (int i = 0; i < N; ++i) AppendCsv(sb, (float)(lastXdot[i] * Mathf.Rad2Deg), "F3");
+
+        AppendCsv(sb, entryErr <= 10.0f ? "1" : "0");
+        AppendCsv(sb, tipErr <= 25.0f ? "1" : "0");
+        AppendCsv(sb, lastSkullViolation <= 0.0f ? "1" : "0");
+
+        if (sb.Length > 0 && sb[sb.Length - 1] == ',') sb.Length = sb.Length - 1;
+        sb.AppendLine();
+        if (csvWriter == null) StartLogging();
+        csvWriter.Write(sb.ToString());
     }
 
     private void OnGUI()
