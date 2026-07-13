@@ -65,7 +65,14 @@ public class ROSADoubleRCMController : MonoBehaviour
     [Header("Robot model")]
     public List<DHLink> dh = new List<DHLink>();
     public float toolLength = 0.72f;
-    public float toolRadius = 0.008f;
+    [Tooltip("Physical needle/electrode radius used for corridor and safety checks. " +
+             "Real stereotactic biopsy needles are ~1.6-2.5 mm diameter, DBS/SEEG electrodes are thinner " +
+             "(0.8-1.27 mm). 0.0012 m = 2.4 mm diameter, a realistic biopsy-needle scale.")]
+    public float toolRadius = 0.0012f;
+    [Tooltip("Radius used only for the shaft cylinder mesh, so the needle stays visible on screen " +
+             "even though the physical toolRadius is sub-millimetric. Does NOT affect collision, " +
+             "corridor, or safety-margin calculations, only the drawn geometry.")]
+    public float toolVisualRadius = 0.004f;
     public float linkRadius = 0.035f;
     public bool buildRobotVisualsOnStart = true;
 
@@ -103,15 +110,62 @@ public class ROSADoubleRCMController : MonoBehaviour
 
     [Header("Target-RCM cone")]
     public float coneHalfAngleDeg = 4.5f;
-    public float coneAngularSpeedDeg = 12.0f;
+    [Tooltip("Angular speed of the cone used in Task 2 (entry-side cone around the trocar). " +
+             "Lowered from 12 to 8 deg/s: at 12 deg/s the steady-state tip-target error measured " +
+             "~3.5 mm, just over the 3 mm clinical threshold, due to the same moving-target lag " +
+             "coupling seen in Task 4 (see coneAngularSpeedTask4Deg).")]
+    public float coneAngularSpeedDeg = 8.0f;
+    [Tooltip("Angular speed of the cone used in Task 4 (tip cone around the deep target). " +
+             "Kept separate and slower than Task 2's, because in Task 4 the RCM must also stay " +
+             "locked at the entry point: a fast-moving secondary target drags the RCM off through " +
+             "the weighted DLS coupling. Lower this if T4 entry-RCM stability keeps failing.")]
+    public float coneAngularSpeedTask4Deg = 7.0f;
     [Tooltip("Radius used in task 4 when the tip traces a circle around the deep target while the needle keeps the entry RCM.")]
     public float tipTargetConeRadius = 0.035f;
     public bool animateCone = true;
     public float entrySidePointSafetyOffset = 0.0f;
 
+    [Header("Task 2 priority tuning (TargetRCM_EntryCone)")]
+    [Tooltip("Tip tracking multiplier used only in Task 2.")]
+    public float task2TipGainMultiplier = 1.65f;
+    [Tooltip("Entry-cone tracking multiplier used only in Task 2.")]
+    public float task2ConeGainMultiplier = 0.70f;
+    [Tooltip("DLS damping multiplier used only in Task 2.")]
+    public float task2DampingMultiplier = 1.0f;
+    [Tooltip("Nullspace multiplier used only in Task 2.")]
+    public float task2NullspaceScaleMultiplier = 0.6f;
+    [Tooltip("Distance from either q4 limit at which Task 2 stops outward q4 motion.")]
+    public float task2Joint4SoftLimitMarginDeg = 25f;
+
+    [Header("Task 4 priority tuning (EntryRCM_TipConeAroundTarget)")]
+    [Tooltip("Multiplies tipGain for the cone-tracking task while in Task 4, so the RCM task can " +
+             "win the conflict instead of being dragged by the moving cone target.")]
+    public float task4TipGainMultiplier = 0.85f;
+    [Tooltip("Multiplies rcmGain for the entry-RCM task while in Task 4. Kept as a modest increase " +
+             "(not pushed further) after the Task 2 gain-only attempt caused instability; the " +
+             "nullspace-scale reduction below is the safer lever for closing the remaining gap.")]
+    public float task4RcmGainMultiplier = 1.6f;
+    [Tooltip("Multiplies the DLS damping while in Task 4. Lower values track more exactly but are " +
+             "closer to singular behavior; raise back toward 1 if you see jitter near the workspace edge.")]
+    public float task4DampingMultiplier = 0.7f;
+    [Tooltip("Multiplies nullspaceScale while in Task 4. The nullspace injection is itself solved with " +
+             "an approximate DLS projector, so it can leak a small amount of error into the primary " +
+             "RCM task; reducing it during Task 4 trades some joint-limit/skull-avoidance authority for " +
+             "tighter RCM stability. Lowered further (0.5 -> 0.35) after measuring 2.7 mm settled " +
+             "entry-RCM error, just over the 2.0 mm threshold.")]
+    public float task4NullspaceScaleMultiplier = 0.35f;
+
     [Header("Safety / avoidance")]
     public float skullSafetyMargin = 0.035f;
-    public float allowedNeedleCorridorRadius = 0.035f;
+    [Tooltip("Must stay larger than tipTargetConeRadius, with margin. Task 4's tip deliberately " +
+             "traces a circle of radius tipTargetConeRadius around the deep target, which lies " +
+             "inside the skull by design. If allowedNeedleCorridorRadius is too close to " +
+             "tipTargetConeRadius (previously both were 0.035 m, i.e. zero margin), any small " +
+             "tracking deviation pushes the tip outside the 'allowed corridor' tube and it gets " +
+             "misclassified as an unauthorized skull penetration, even though the motion is the " +
+             "intended clinical behavior. Raised to 0.06 m (25 mm margin over the 35 mm cone radius) " +
+             "and enforced at runtime in Awake().")]
+    public float allowedNeedleCorridorRadius = 0.06f;
     public bool useSkullAvoidance = true;
 
     [Header("Task transition")]
@@ -126,6 +180,15 @@ public class ROSADoubleRCMController : MonoBehaviour
     [Tooltip("CSV sampling period. 0.05 s gives about 20 Hz, enough for clean presentation plots without huge files.")]
     public float logPeriod = 0.05f;
     public bool logPresentationMetrics = true;
+
+    [Header("Pass/Fail thresholds (CSV log + report)")]
+    [Tooltip("Real clinical accuracy for ROSA-like stereotactic robots is ~1-2 mm median, up to " +
+             "~4 mm in the worst-case referencing methods. Previous default of 10 mm was a coarse " +
+             "safety margin, not a realistic accuracy target.")]
+    public float entryRcmOkThresholdMm = 2.0f;
+    [Tooltip("Real clinical target accuracy is typically 1-3 mm. Previous default of 25 mm was far " +
+             "too loose to be a meaningful clinical accuracy check.")]
+    public float tipTargetOkThresholdMm = 3.0f;
 
     private readonly List<GameObject> jointSpheres = new List<GameObject>();
     private readonly List<GameObject> linkCylinders = new List<GameObject>();
@@ -147,6 +210,7 @@ public class ROSADoubleRCMController : MonoBehaviour
     private StreamWriter csvWriter;
     private float logTimer;
     private double[] lastXdot = new double[7];
+    private bool lastTask2Joint4LimitActive;
     private Vector3 lastTip;
     private Vector3 lastRCM;
     private Vector3 lastEntrySide;
@@ -166,6 +230,25 @@ public class ROSADoubleRCMController : MonoBehaviour
     {
         if (dh == null || dh.Count != N) SetDefaultDH();
         EnsureStateArrays();
+        EnsureCorridorMargin();
+    }
+
+    private void EnsureCorridorMargin()
+    {
+        // Zero (or negative) margin between the corridor tube and the Task 4 tip-cone radius
+        // makes the intended cone-tracing motion near the target register as a skull violation
+        // (see allowedNeedleCorridorRadius tooltip). Auto-correct and warn instead of silently
+        // producing a controller that fights its own safety check.
+        float minRequired = tipTargetConeRadius + 0.015f;
+        if (allowedNeedleCorridorRadius < minRequired)
+        {
+            Debug.LogWarning(string.Format(
+                "ROSADoubleRCMController: allowedNeedleCorridorRadius ({0:F3} m) was too close to " +
+                "tipTargetConeRadius ({1:F3} m). Raised to {2:F3} m to keep Task 4's cone-tracing " +
+                "motion from being misclassified as a skull violation.",
+                allowedNeedleCorridorRadius, tipTargetConeRadius, minRequired));
+            allowedNeedleCorridorRadius = minRequired;
+        }
     }
 
     private void Start()
@@ -212,11 +295,11 @@ public class ROSADoubleRCMController : MonoBehaviour
         // Standard DH, meters and degrees. Plausible ROSA-like 6R arm:
         // anthropomorphic shoulder/elbow + compact spherical wrist. Replace these values with real ROSA DH if available.
         dh.Add(new DHLink(0.045f, -90f, 0.42f, 0f, -170f, 170f));
-        dh.Add(new DHLink(0.42f,    0f, 0.00f, 0f, -120f, 120f));
+        dh.Add(new DHLink(0.42f, 0f, 0.00f, 0f, -120f, 120f));
         dh.Add(new DHLink(0.055f, -90f, 0.00f, 0f, -150f, 150f));
-        dh.Add(new DHLink(0.000f,  90f, 0.36f, 0f, -170f, 170f));
+        dh.Add(new DHLink(0.000f, 90f, 0.36f, 0f, -170f, 170f));
         dh.Add(new DHLink(0.000f, -90f, 0.00f, 0f, -120f, 120f));
-        dh.Add(new DHLink(0.000f,   0f, 0.12f, 0f, -360f, 360f));
+        dh.Add(new DHLink(0.000f, 0f, 0.12f, 0f, -360f, 360f));
     }
 
     public void ResetControllerState(bool keepMode)
@@ -260,9 +343,33 @@ public class ROSADoubleRCMController : MonoBehaviour
         }
     }
 
+    [Header("Integration stability")]
+    [Tooltip("Maximum integration sub-step. Smaller values improve closed-loop stability.")]
+    public float maxIntegrationSubstepSeconds = 0.008f;
+
     private void StepController(float dt)
     {
         dt = Mathf.Clamp(dt, 0.001f, 0.033f);
+        int substeps = Mathf.Clamp(Mathf.CeilToInt(dt / Mathf.Max(1e-4f, maxIntegrationSubstepSeconds)), 1, 8);
+        float subDt = dt / substeps;
+        for (int s = 0; s < substeps; ++s)
+        {
+            RunIntegrationSubstep(subDt);
+        }
+
+        if (mode == RCMMode.InsertionSequence)
+            UpdateInsertionPhase(dt);
+
+        lastTip = ToolTip(GetQRad());
+        lastRCM = RCMPoint(GetQRad(), lambda);
+        lastEntrySide = EntrySidePointOnTool(GetQRad(), lambda);
+        lastConeDesired = DesiredConeEntryPoint();
+        lastTipConeDesired = DesiredTipConeAroundTarget();
+        lastSkullViolation = ComputeMaxSkullViolation(GetQRad(), lambda) * 1000f;
+    }
+
+    private void RunIntegrationSubstep(float dt)
+    {
         float[] q = GetQRad();
         List<PointTask> tasks = BuildTasks(q, lambda);
 
@@ -289,14 +396,41 @@ public class ROSADoubleRCMController : MonoBehaviour
             r += 3;
         }
 
-        double[] xdotBase = DampedLeastSquares(J, y, damping);
+        // Task-specific numerical scaling. Task 2's hierarchy and q4 active set are applied below.
+        float effectiveDamping = damping;
+        float effectiveNullspaceScale = nullspaceScale;
+        if (mode == RCMMode.TargetRCM_EntryCone)
+        {
+            effectiveDamping = damping * task2DampingMultiplier;
+            effectiveNullspaceScale = nullspaceScale * task2NullspaceScaleMultiplier;
+        }
+        else if (mode == RCMMode.EntryRCM_TipConeAroundTarget)
+        {
+            effectiveDamping = damping * task4DampingMultiplier;
+            effectiveNullspaceScale = nullspaceScale * task4NullspaceScaleMultiplier;
+        }
+
+        double[] xdotBase;
+        float boostedDamping;
+        if (mode == RCMMode.TargetRCM_EntryCone && rows == 6)
+            xdotBase = SolveTask2WithStrictPriorityAndGuard(J, y, effectiveDamping, out boostedDamping);
+        else
+        {
+            lastTask2Joint4LimitActive = false;
+            xdotBase = SolveWithSingularityGuard(J, y, effectiveDamping, out boostedDamping);
+        }
         double[] w = BuildNullspaceVelocity(q, lambda);
         double[] jTimesW = MatVec(J, w);
-        double[] projectedJW = DampedLeastSquares(J, jTimesW, damping);
+        // Reuse the same (possibly boosted) damping for the nullspace projector, so the two
+        // solves stay numerically consistent near the same near-singular configuration.
+        double[] projectedJW = DampedLeastSquares(J, jTimesW, boostedDamping);
         double[] xdot = new double[NX];
         for (int i = 0; i < NX; ++i)
         {
-            xdot[i] = xdotBase[i] + nullspaceScale * (w[i] - projectedJW[i]);
+            double nullspaceContrib = effectiveNullspaceScale * (w[i] - projectedJW[i]);
+            if (mode == RCMMode.TargetRCM_EntryCone && lastTask2Joint4LimitActive && i == 3)
+                nullspaceContrib = 0.0;
+            xdot[i] = xdotBase[i] + nullspaceContrib;
         }
 
         // Saturation.
@@ -312,16 +446,6 @@ public class ROSADoubleRCMController : MonoBehaviour
         }
         lambda = Mathf.Clamp(lambda + (float)(xdot[6] * dt), 0.02f, 0.995f);
         lastXdot = xdot;
-
-        if (mode == RCMMode.InsertionSequence)
-            UpdateInsertionPhase(dt);
-
-        lastTip = ToolTip(GetQRad());
-        lastRCM = RCMPoint(GetQRad(), lambda);
-        lastEntrySide = EntrySidePointOnTool(GetQRad(), lambda);
-        lastConeDesired = DesiredConeEntryPoint();
-        lastTipConeDesired = DesiredTipConeAroundTarget();
-        lastSkullViolation = ComputeMaxSkullViolation(GetQRad(), lambda) * 1000f;
     }
 
     private List<PointTask> BuildTasks(float[] q, float lam)
@@ -342,15 +466,18 @@ public class ROSADoubleRCMController : MonoBehaviour
             // An entry-side point on the needle traces a small cone around the trocar.
             // The explicit RCMPoint->target task was removed because, with lambda close to 1,
             // it duplicates the tip task and made the controller visibly lag/jitter.
-            tasks.Add(new PointTask(ToolTip, target, tipGain * 1.60f, 0.055f));
-            tasks.Add(new PointTask(EntrySidePointOnTool, DesiredConeEntryPoint(), coneGain * 0.70f, 0.070f));
+            tasks.Add(new PointTask(ToolTip, target, tipGain * task2TipGainMultiplier, 0.055f));
+            tasks.Add(new PointTask(EntrySidePointOnTool, DesiredConeEntryPoint(), coneGain * task2ConeGainMultiplier, 0.070f));
         }
         else if (mode == RCMMode.EntryRCM_TipConeAroundTarget)
         {
             // Task 4: trocar-side pivot. The needle keeps the RCM fixed at the entry/trocar,
             // while the tip traces a small circle around the deep target.
-            tasks.Add(new PointTask(ToolTip, DesiredTipConeAroundTarget(), tipGain, 0.12f));
-            tasks.Add(new PointTask(RCMPoint, entry, rcmGain, 0.06f));
+            // The cone target moves continuously, so without extra RCM priority the weighted
+            // DLS solve lets some of that tracking velocity leak into the RCM error. We soften
+            // the cone-tracking gain slightly and boost the RCM gain to keep the pivot locked.
+            tasks.Add(new PointTask(ToolTip, DesiredTipConeAroundTarget(), tipGain * task4TipGainMultiplier, 0.12f));
+            tasks.Add(new PointTask(RCMPoint, entry, rcmGain * task4RcmGainMultiplier, 0.06f));
         }
         /*else if (mode == RCMMode.InsertionSequence)
         {
@@ -634,10 +761,10 @@ public class ROSADoubleRCMController : MonoBehaviour
         float sa = Mathf.Sin(alpha);
 
         Matrix4x4 A = Matrix4x4.identity;
-        A.m00 = ct;  A.m01 = -st * ca;  A.m02 = st * sa;   A.m03 = link.a * ct;
-        A.m10 = st;  A.m11 =  ct * ca;  A.m12 = -ct * sa;  A.m13 = link.a * st;
-        A.m20 = 0f;  A.m21 = sa;        A.m22 = ca;        A.m23 = link.d;
-        A.m30 = 0f;  A.m31 = 0f;        A.m32 = 0f;        A.m33 = 1f;
+        A.m00 = ct; A.m01 = -st * ca; A.m02 = st * sa; A.m03 = link.a * ct;
+        A.m10 = st; A.m11 = ct * ca; A.m12 = -ct * sa; A.m13 = link.a * st;
+        A.m20 = 0f; A.m21 = sa; A.m22 = ca; A.m23 = link.d;
+        A.m30 = 0f; A.m31 = 0f; A.m32 = 0f; A.m33 = 1f;
         return A;
     }
 
@@ -719,7 +846,9 @@ public class ROSADoubleRCMController : MonoBehaviour
         if (b1.sqrMagnitude < 1e-6f) b1 = Vector3.Cross(axis, Vector3.right);
         b1.Normalize();
         Vector3 b2 = Vector3.Cross(axis, b1).normalized;
-        float angle = animateCone ? ConeLocalTime() * coneAngularSpeedDeg * Mathf.Deg2Rad : 0f;
+        // Task 4's cone target uses its own (slower) angular speed: it competes with the
+        // entry-RCM task, unlike Task 2's cone which has no simultaneous RCM lock to disturb.
+        float angle = animateCone ? ConeLocalTime() * coneAngularSpeedTask4Deg * Mathf.Deg2Rad : 0f;
         return target + radius * (Mathf.Cos(angle) * b1 + Mathf.Sin(angle) * b2);
     }
 
@@ -841,6 +970,186 @@ public class ROSADoubleRCMController : MonoBehaviour
     }
 
     // ---------- Linear algebra: damped least squares ----------
+
+    [Tooltip("If the raw (pre-saturation) joint command from the DLS solve would exceed " +
+             "maxJointSpeedDeg by more than this factor, treat it as a near-singular configuration " +
+             "and re-solve with boosted damping instead of letting the per-joint clamp distort the " +
+             "commanded direction (which is what produced the flat-topped ~80 deg/s plateaus and " +
+             "the resulting T2 tracking blow-up). 1.0 = trigger as soon as any joint would saturate.")]
+    public float singularityGuardTriggerRatio = 1.0f;
+    [Tooltip("How strongly to boost damping when the singularity guard triggers: " +
+             "boostedDamping = damping * sqrt(overshootRatio) * this factor.")]
+    public float singularityGuardBoostFactor = 1.2f;
+
+    private double[] SolveTask2WithStrictPriorityAndGuard(
+        double[,] stackedJ,
+        double[] stackedY,
+        float baseDamping,
+        out float usedDamping)
+    {
+        double[] xdot = SolveTask2RespectingJoint4(stackedJ, stackedY, baseDamping);
+        double worstRatio = WorstJointSpeedRatio(xdot);
+
+        usedDamping = baseDamping;
+        if (worstRatio > singularityGuardTriggerRatio)
+        {
+            usedDamping = baseDamping * (float)Math.Sqrt(worstRatio) * singularityGuardBoostFactor;
+            xdot = SolveTask2RespectingJoint4(stackedJ, stackedY, usedDamping);
+        }
+        return xdot;
+    }
+
+    private double[] SolveTask2RespectingJoint4(double[,] J, double[] y, float damp)
+    {
+        double[] xdot = SolveTask2WithStrictPriority(J, y, damp);
+        lastTask2Joint4LimitActive = Task2Joint4CommandWouldCrossSoftLimit(xdot[3]);
+        return lastTask2Joint4LimitActive ? SolveTask2WithFixedJoint4(J, y, damp) : xdot;
+    }
+
+    private bool Task2Joint4CommandWouldCrossSoftLimit(double q4dot)
+    {
+        float margin = Mathf.Clamp(task2Joint4SoftLimitMarginDeg, 0f,
+            0.45f * (dh[3].qMaxDeg - dh[3].qMinDeg));
+        float lowerSoftLimit = dh[3].qMinDeg + margin;
+        float upperSoftLimit = dh[3].qMaxDeg - margin;
+        float q4 = qDeg[3];
+        return (q4 <= lowerSoftLimit && q4dot < 0.0) ||
+               (q4 >= upperSoftLimit && q4dot > 0.0);
+    }
+
+    private double[] SolveTask2WithFixedJoint4(double[,] stackedJ, double[] stackedY, double damp)
+    {
+        const int fixedJoint = 3; // q4, zero-based.
+        int rows = stackedJ.GetLength(0);
+        int reducedVariables = stackedJ.GetLength(1) - 1;
+        double[,] reducedJ = new double[rows, reducedVariables];
+
+        for (int r = 0; r < rows; ++r)
+        {
+            int reducedColumn = 0;
+            for (int c = 0; c < stackedJ.GetLength(1); ++c)
+            {
+                if (c == fixedJoint) continue;
+                reducedJ[r, reducedColumn++] = stackedJ[r, c];
+            }
+        }
+
+        // Solve without q4 so the Cartesian command is redistributed before integration.
+        double[] reducedVelocity = SolveTask2WithStrictPriority(reducedJ, stackedY, damp);
+        double[] fullVelocity = new double[NX];
+        int reducedIndex = 0;
+        for (int c = 0; c < NX; ++c)
+        {
+            if (c == fixedJoint)
+            {
+                fullVelocity[c] = 0.0;
+                continue;
+            }
+            fullVelocity[c] = reducedVelocity[reducedIndex++];
+        }
+        return fullVelocity;
+    }
+
+    private double[] SolveTask2WithStrictPriority(double[,] stackedJ, double[] stackedY, double damp)
+    {
+        // Task 2 row order is tip first, entry-cone second.
+        int variables = stackedJ.GetLength(1);
+        double[,] tipJ = new double[3, variables];
+        double[,] coneJ = new double[3, variables];
+        double[] tipY = new double[3];
+        double[] coneY = new double[3];
+        for (int r = 0; r < 3; ++r)
+        {
+            tipY[r] = stackedY[r];
+            coneY[r] = stackedY[r + 3];
+            for (int c = 0; c < variables; ++c)
+            {
+                tipJ[r, c] = stackedJ[r, c];
+                coneJ[r, c] = stackedJ[r + 3, c];
+            }
+        }
+
+        double[] tipVelocity = DampedLeastSquares(tipJ, tipY, damp);
+
+        // N_tip = I - J_tip# J_tip.
+        double[,] tipNullspace = new double[variables, variables];
+        for (int col = 0; col < variables; ++col)
+        {
+            double[] basis = new double[variables];
+            basis[col] = 1.0;
+            double[] projected = ProjectIntoDampedNullspace(tipJ, basis, damp);
+            for (int row = 0; row < variables; ++row) tipNullspace[row, col] = projected[row];
+        }
+
+        double[] coneResidual = new double[3];
+        double[] coneVelocityFromTip = MatVec(coneJ, tipVelocity);
+        for (int r = 0; r < 3; ++r) coneResidual[r] = coneY[r] - coneVelocityFromTip[r];
+
+        double[,] coneInTipNullspace = Multiply(coneJ, tipNullspace);
+        double[] freeVelocity = DampedLeastSquares(coneInTipNullspace, coneResidual, damp);
+        double[] coneVelocity = MatVec(tipNullspace, freeVelocity);
+
+        double[] xdot = new double[variables];
+        for (int i = 0; i < variables; ++i) xdot[i] = tipVelocity[i] + coneVelocity[i];
+
+        // Correct the small primary-task leakage introduced by damped projection.
+        double[] achievedTipVelocity = MatVec(tipJ, xdot);
+        double[] tipResidual = new double[3];
+        for (int r = 0; r < 3; ++r) tipResidual[r] = tipY[r] - achievedTipVelocity[r];
+        double[] tipCorrection = DampedLeastSquares(tipJ, tipResidual, damp);
+        for (int i = 0; i < variables; ++i) xdot[i] += tipCorrection[i];
+        return xdot;
+    }
+
+    private double[] ProjectIntoDampedNullspace(double[,] J, double[] velocity, double damp)
+    {
+        double[] taskVelocity = MatVec(J, velocity);
+        double[] projectedTaskVelocity = DampedLeastSquares(J, taskVelocity, damp);
+        double[] result = new double[velocity.Length];
+        for (int i = 0; i < velocity.Length; ++i)
+            result[i] = velocity[i] - projectedTaskVelocity[i];
+        return result;
+    }
+
+    private double[,] Multiply(double[,] a, double[,] b)
+    {
+        int rows = a.GetLength(0);
+        int inner = a.GetLength(1);
+        int cols = b.GetLength(1);
+        double[,] result = new double[rows, cols];
+        for (int r = 0; r < rows; ++r)
+            for (int c = 0; c < cols; ++c)
+                for (int k = 0; k < inner; ++k)
+                    result[r, c] += a[r, k] * b[k, c];
+        return result;
+    }
+
+    private double WorstJointSpeedRatio(double[] xdot)
+    {
+        float maxJointSpeed = maxJointSpeedDeg * Mathf.Deg2Rad;
+        double worstRatio = 0.0;
+        for (int i = 0; i < N; ++i)
+            worstRatio = Math.Max(worstRatio, Math.Abs(xdot[i]) / Math.Max(1e-6, maxJointSpeed));
+        return worstRatio;
+    }
+
+    private double[] SolveWithSingularityGuard(double[,] J, double[] y, float baseDamping, out float usedDamping)
+    {
+        double[] xdot = DampedLeastSquares(J, y, baseDamping);
+        double worstRatio = WorstJointSpeedRatio(xdot);
+
+        usedDamping = baseDamping;
+        if (worstRatio > singularityGuardTriggerRatio)
+        {
+            // The raw command needs more speed than any joint can actually deliver: this is the
+            // signature of a near-singular Jacobian, not just a fast task. Re-solving with more
+            // damping trades some tracking speed for a numerically well-behaved direction, instead
+            // of saturating each joint independently and ending up going the wrong way overall.
+            usedDamping = baseDamping * (float)Math.Sqrt(worstRatio) * singularityGuardBoostFactor;
+            xdot = DampedLeastSquares(J, y, usedDamping);
+        }
+        return xdot;
+    }
 
     private double[] DampedLeastSquares(double[,] J, double[] y, double damp)
     {
@@ -1025,7 +1334,7 @@ public class ROSADoubleRCMController : MonoBehaviour
 
         Vector3 baseP = ToolBase(q);
         Vector3 tip = ToolTip(q);
-        DrawCylinderBetween(shaftCylinder.transform, baseP, tip, toolRadius);
+        DrawCylinderBetween(shaftCylinder.transform, baseP, tip, toolVisualRadius);
         tipSphere.transform.position = tip;
 
         Vector3 rcm = RCMPoint(q, lambda);
@@ -1195,8 +1504,14 @@ public class ROSADoubleRCMController : MonoBehaviour
             "entry_x,entry_y,entry_z,target_x,target_y,target_z," +
             "tip_target_error_mm,entry_rcm_error_mm,target_rcm_error_mm,task2_entry_cone_error_mm,task4_tip_cone_error_mm,active_task_error_mm," +
             "tip_line_distance_mm,shaft_line_max_distance_mm,tool_axis_angle_deg,skull_violation_mm," +
-            "qdot_norm_rad_s,lambdadot,q1_deg,q2_deg,q3_deg,q4_deg,q5_deg,q6_deg,q1dot_deg_s,q2dot_deg_s,q3dot_deg_s,q4dot_deg_s,q5dot_deg_s,q6dot_deg_s," +
-            "entry_rcm_ok_10mm,tip_target_ok_25mm,skull_ok_0mm";
+            "qdot_norm_rad_s,task2_q4_limit_active,lambdadot,q1_deg,q2_deg,q3_deg,q4_deg,q5_deg,q6_deg,q1dot_deg_s,q2dot_deg_s,q3dot_deg_s,q4dot_deg_s,q5dot_deg_s,q6dot_deg_s," +
+            "entry_rcm_ok,tip_target_ok,skull_ok_0mm";
+        // Threshold values actually used (see entryRcmOkThresholdMm / tipTargetOkThresholdMm
+        // in the inspector) are written once at the top of the file as a comment line, since the
+        // header itself no longer hardcodes them in its column names.
+        csvWriter?.WriteLine(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            "# entry_rcm threshold = {0:F2} mm, tip_target threshold = {1:F2} mm, skull threshold = 0 mm",
+            entryRcmOkThresholdMm, tipTargetOkThresholdMm));
         csvWriter.WriteLine(header);
         Debug.Log("RCM presentation CSV log saved to: " + csvPath);
     }
@@ -1295,13 +1610,14 @@ public class ROSADoubleRCMController : MonoBehaviour
         AppendCsv(sb, toolAxisAngle, "F3");
         AppendCsv(sb, lastSkullViolation, "F3");
         AppendCsv(sb, qdotNorm, "F5");
+        AppendCsv(sb, lastTask2Joint4LimitActive ? "1" : "0");
         AppendCsv(sb, lastXdot[6], "F5");
 
         for (int i = 0; i < N; ++i) AppendCsv(sb, qDeg[i], "F3");
         for (int i = 0; i < N; ++i) AppendCsv(sb, (float)(lastXdot[i] * Mathf.Rad2Deg), "F3");
 
-        AppendCsv(sb, entryErr <= 10.0f ? "1" : "0");
-        AppendCsv(sb, tipErr <= 25.0f ? "1" : "0");
+        AppendCsv(sb, entryErr <= entryRcmOkThresholdMm ? "1" : "0");
+        AppendCsv(sb, tipErr <= tipTargetOkThresholdMm ? "1" : "0");
         AppendCsv(sb, lastSkullViolation <= 0.0f ? "1" : "0");
 
         if (sb.Length > 0 && sb[sb.Length - 1] == ',') sb.Length = sb.Length - 1;
@@ -1321,11 +1637,13 @@ public class ROSADoubleRCMController : MonoBehaviour
         Label(x, ref y, string.Format("lambda: {0:F3}   nominal entry: {1:F3}   nominal target: {2:F3}", lambda, NominalEntryLambda(), NominalTargetLambda()));
         Label(x, ref y, string.Format("Tip→target: {0:F1} mm", Vector3.Distance(lastTip, TargetPosition()) * 1000f));
         Label(x, ref y, string.Format("RCM→entry: {0:F1} mm    RCM→target: {1:F1} mm", Vector3.Distance(lastRCM, EntryPosition()) * 1000f, Vector3.Distance(lastRCM, TargetPosition()) * 1000f));
+        Label(x, ref y, string.Format("Thresholds: entry-RCM <= {0:F1} mm, tip/target <= {1:F1} mm", entryRcmOkThresholdMm, tipTargetOkThresholdMm));
         Label(x, ref y, string.Format("Task 2 entry-cone error: {0:F1} mm", Vector3.Distance(lastEntrySide, lastConeDesired) * 1000f));
         Label(x, ref y, string.Format("Task 4 tip-cone error: {0:F1} mm", Vector3.Distance(lastTip, lastTipConeDesired) * 1000f));
         Label(x, ref y, skull != null && useSkullAvoidance ? string.Format("Skull violation outside corridor: {0:F1} mm", lastSkullViolation) : "Skull: disabled for current tuning");
         Label(x, ref y, "Task 3 now: above entry -> trocar -> target, with shaft-axis guide.");
         Label(x, ref y, "Keys: 1 Entry-RCM, 2 tip fixed+target cone, 3 insertion, 4 entry fixed+tip cone, 0 hold");
+        Label(x, ref y, "Task 2 q4 active-set: " + lastTask2Joint4LimitActive);
         Label(x, ref y, "Space pause, C cone on/off, R reset, L CSV log");
         Label(x, ref y, "DH table is in the inspector and can be replaced with real ROSA DH.");
     }

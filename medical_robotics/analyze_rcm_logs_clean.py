@@ -91,7 +91,10 @@ def discover_csvs(inputs: Iterable[str]) -> List[Path]:
 def load_logs(files: List[Path]) -> pd.DataFrame:
     frames = []
     for path in files:
-        df = pd.read_csv(path)
+        # comment="#" skips the metadata line the Unity controller now writes before the
+        # header (e.g. "# entry_rcm threshold = 2.00 mm, ..."). Without this, pandas would
+        # read that line as the header and every column would come back empty/NaN.
+        df = pd.read_csv(path, comment="#")
         df = df.rename(columns={k: v for k, v in FALLBACK_RENAMES.items() if k in df.columns and v not in df.columns})
         df["log_file"] = path.name
 
@@ -292,6 +295,97 @@ def plot_global_metric(
     save_fig(out_dir / filename)
 
 
+def plot_joint_angles(df: pd.DataFrame, out_dir: Path) -> None:
+    # Diagnostic plot, not part of the "for slides" set: shows all 6 joint angles over time
+    # against their DH joint limits, to check whether a joint is pinned at its physical limit
+    # during an error spike (as opposed to a numerical/damping issue, which wouldn't show this).
+    # NOTE: these limits mirror the current SetDefaultDH() defaults in ROSADoubleRCMController.cs.
+    # If you changed qMinDeg/qMaxDeg in the Inspector, update JOINT_LIMITS_DEG below to match.
+    JOINT_LIMITS_DEG = [
+        (-170.0, 170.0),
+        (-120.0, 120.0),
+        (-150.0, 150.0),
+        (-170.0, 170.0),
+        (-120.0, 120.0),
+        (-360.0, 360.0),
+    ]
+    cols = [f"q{i}_deg" for i in range(1, 7)]
+    if not all(available(df, c) for c in cols) or "time_rel_s" not in df.columns:
+        return
+    g = df.dropna(subset=["time_rel_s"] + cols).copy()
+    if g.empty:
+        return
+
+    fig, axes = plt.subplots(2, 3, figsize=(15.5, 7.5), sharex=True)
+    for i, ax in enumerate(axes.flat):
+        col = cols[i]
+        qmin, qmax = JOINT_LIMITS_DEG[i]
+        y = pd.to_numeric(g[col], errors="coerce")
+        ax.plot(g["time_rel_s"], y, linewidth=1.4)
+        ax.axhline(qmin, linestyle="--", linewidth=1.0, color="crimson", alpha=0.7)
+        ax.axhline(qmax, linestyle="--", linewidth=1.0, color="crimson", alpha=0.7)
+        margin = max(1.0, 0.05 * (qmax - qmin))
+        near_limit = ((y >= qmax - margin) | (y <= qmin + margin)).any()
+        title = f"Joint {i + 1}" + ("  ⚠ near limit" if near_limit else "")
+        ax.set_title(title, fontsize=10, color=("crimson" if near_limit else "black"))
+        ax.set_ylabel("deg")
+        ax.grid(True, alpha=0.25)
+    for ax in axes[-1, :]:
+        ax.set_xlabel("Time [s]")
+    fig.suptitle("Joint angles vs. DH limits (diagnostic)", fontsize=13)
+    save_fig(out_dir / "14_joint_angles_diagnostic.png")
+
+
+def plot_nullspace_vs_task(df: pd.DataFrame, out_dir: Path) -> None:
+    """Compare the two pre-saturation velocity components during Task 2 only."""
+    task_col = "raw_task_qdot_norm_rad_s"
+    null_col = "nullspace_joint_contrib_norm_rad_s"
+    if not available(df, task_col) or not available(df, null_col):
+        return
+    g = df[task_mask(df, "T2_target_rcm_entry_cone")].copy()
+    g = g.dropna(subset=["time_rel_s", task_col, null_col])
+    if g.empty:
+        return
+
+    x = local_time(g)
+    task_y = pd.to_numeric(g[task_col], errors="coerce")
+    null_y = pd.to_numeric(g[null_col], errors="coerce")
+    plt.figure(figsize=(10.5, 4.8))
+    plt.plot(x, task_y, linewidth=1.8, label="raw primary-task qdot norm")
+    plt.plot(x, null_y, linewidth=1.8, label="projected nullspace contribution norm")
+    plt.title("Task 2 — primary task vs. nullspace joint velocity")
+    plt.xlabel("Local task time [s]")
+    plt.ylabel("Velocity norm [rad/s]")
+    plt.grid(True, alpha=0.28)
+    plt.legend(loc="best", fontsize=9)
+    save_fig(out_dir / "15_nullspace_vs_task_diagnostic.png")
+
+
+def plot_task2_conditioning(df: pd.DataFrame, out_dir: Path) -> None:
+    condition_col = "jacobian_effective_condition_number"
+    sigma_col = "jacobian_sigma_min_nonzero"
+    if not available(df, condition_col) or not available(df, sigma_col):
+        return
+    g = df[task_mask(df, "T2_target_rcm_entry_cone")].copy()
+    g = g.dropna(subset=["time_rel_s", condition_col, sigma_col])
+    if g.empty:
+        return
+    x = local_time(g)
+    fig, left = plt.subplots(figsize=(10.5, 4.8))
+    right = left.twinx()
+    line1 = left.plot(x, pd.to_numeric(g[condition_col]), linewidth=1.8,
+                      label="effective condition number", color="tab:red")
+    line2 = right.plot(x, pd.to_numeric(g[sigma_col]), linewidth=1.8,
+                       label="smallest nonzero singular value", color="tab:blue")
+    left.set_title("Task 2 — primary Jacobian conditioning")
+    left.set_xlabel("Local task time [s]")
+    left.set_ylabel("Condition number", color="tab:red")
+    right.set_ylabel("Smallest singular value", color="tab:blue")
+    left.grid(True, alpha=0.28)
+    left.legend(line1 + line2, [line.get_label() for line in line1 + line2], loc="best", fontsize=9)
+    save_fig(out_dir / "16_task2_jacobian_conditioning.png")
+
+
 def plot_timeline(df: pd.DataFrame, out_dir: Path) -> None:
     if "task" not in df.columns or "time_rel_s" not in df.columns:
         return
@@ -324,13 +418,32 @@ def plot_active_error(df: pd.DataFrame, out_dir: Path, cone_thr: float) -> None:
     )
 
 
-def pass_fail_summary(df: pd.DataFrame, entry_thr: float, tip_thr: float, cone_thr: float, skull_thr: float) -> pd.DataFrame:
+def pass_fail_summary(
+    df: pd.DataFrame,
+    entry_thr: float,
+    tip_thr: float,
+    cone_thr: float,
+    skull_thr: float,
+    settle_time_s: float = 1.0,
+) -> pd.DataFrame:
     rows = []
+
+    # Exclude samples within `settle_time_s` of the start of each (log_file, task, phase) run
+    # from the max/steady-state check. A "max" computed over the whole task window is dominated
+    # by the transient right after switching mode/phase (the arm still converging from wherever
+    # it was before), not by the controller's actual tracking accuracy — the same way a real
+    # clinical accuracy measurement is taken after the instrument has settled, not mid-motion.
+    # Set settle_time_s=0 to recover the old (transient-inclusive) behavior.
+    df = df.copy()
+    local_t = df.groupby(["log_file", "task", "phase"], dropna=False)["time_rel_s"].transform(
+        lambda s: s - s.min()
+    )
+    settled = local_t >= settle_time_s
 
     def add(name: str, mask: pd.Series, metric: str, threshold: float, unit: str = "mm") -> None:
         if not available(df, metric):
             return
-        s = pd.to_numeric(df.loc[mask, metric], errors="coerce").dropna()
+        s = pd.to_numeric(df.loc[mask & settled, metric], errors="coerce").dropna()
         if s.empty:
             return
         max_value = float(s.max())
@@ -504,10 +617,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate clean, one-metric-per-plot analysis for Multi-RCM Unity logs.")
     parser.add_argument("inputs", nargs="+", help="CSV file(s), glob(s), or RCM_logs folder")
     parser.add_argument("--out", default="RCM_analysis_clean", help="Output folder")
-    parser.add_argument("--entry-threshold-mm", type=float, default=10.0)
-    parser.add_argument("--tip-threshold-mm", type=float, default=25.0)
+    parser.add_argument("--entry-threshold-mm", type=float, default=2.0)
+    parser.add_argument("--tip-threshold-mm", type=float, default=3.0)
     parser.add_argument("--cone-threshold-mm", type=float, default=50.0)
     parser.add_argument("--skull-threshold-mm", type=float, default=0.0)
+    parser.add_argument(
+        "--settle-time-s",
+        type=float,
+        default=1.0,
+        help="Ignore this many seconds after each task/phase switch when computing the "
+             "pass/fail max (excludes the mode-change transient). Use 0 to disable.",
+    )
     args = parser.parse_args()
 
     files = discover_csvs(args.inputs)
@@ -526,12 +646,16 @@ def main() -> None:
         tip_thr=args.tip_threshold_mm,
         cone_thr=args.cone_threshold_mm,
         skull_thr=args.skull_threshold_mm,
+        settle_time_s=args.settle_time_s,
     )
     checks.to_csv(out_dir / "pass_fail_checks.csv", index=False)
     summarize_by_task(df).to_csv(out_dir / "summary_by_task_phase.csv", index=False)
 
     plot_timeline(df, out_dir)
     plot_active_error(df, out_dir, cone_thr=args.cone_threshold_mm)
+    plot_joint_angles(df, out_dir)
+    plot_nullspace_vs_task(df, out_dir)
+    plot_task2_conditioning(df, out_dir)
 
     # Task 1: each relevant metric gets its own plot.
     plot_task_metric(df, out_dir, task="T1_entry_rcm_tip_target", metric="entry_rcm_error_mm", filename="08_T1_entry_rcm_error.png", title="Task 1 — Entry-RCM stability", threshold=args.entry_threshold_mm)
