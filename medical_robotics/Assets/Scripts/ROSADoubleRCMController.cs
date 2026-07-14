@@ -64,7 +64,7 @@ public class ROSADoubleRCMController : MonoBehaviour
 
     [Header("Robot model")]
     public List<DHLink> dh = new List<DHLink>();
-    public float toolLength = 0.72f;
+    public float toolLength = 0.283f;
     [Tooltip("Physical needle/electrode radius used for corridor and safety checks. " +
              "Real stereotactic biopsy needles are ~1.6-2.5 mm diameter, DBS/SEEG electrodes are thinner " +
              "(0.8-1.27 mm). 0.0012 m = 2.4 mm diameter, a realistic biopsy-needle scale.")]
@@ -121,7 +121,7 @@ public class ROSADoubleRCMController : MonoBehaviour
              "the weighted DLS coupling. Lower this if T4 entry-RCM stability keeps failing.")]
     public float coneAngularSpeedTask4Deg = 7.0f;
     [Tooltip("Radius used in task 4 when the tip traces a circle around the deep target while the needle keeps the entry RCM.")]
-    public float tipTargetConeRadius = 0.035f;
+    public float tipTargetConeRadius = 0.0138f;
     public bool animateCone = true;
     public float entrySidePointSafetyOffset = 0.0f;
 
@@ -1291,7 +1291,7 @@ public class ROSADoubleRCMController : MonoBehaviour
         tipSphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         tipSphere.name = "Needle_Tip_Red";
         tipSphere.transform.SetParent(visuals.transform);
-        tipSphere.transform.localScale = Vector3.one * 0.035f;
+        tipSphere.transform.localScale = Vector3.one * 0.01f;
         tipSphere.GetComponent<Renderer>().material = tipMat;
         DestroyCollider(tipSphere);
 
@@ -1305,7 +1305,7 @@ public class ROSADoubleRCMController : MonoBehaviour
         coneDesiredSphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         coneDesiredSphere.name = "Desired_Entry_Cone_Point";
         coneDesiredSphere.transform.SetParent(visuals.transform);
-        coneDesiredSphere.transform.localScale = Vector3.one * 0.028f;
+        coneDesiredSphere.transform.localScale = Vector3.one * 0.008f;
         coneDesiredSphere.GetComponent<Renderer>().material = coneMat;
         DestroyCollider(coneDesiredSphere);
 

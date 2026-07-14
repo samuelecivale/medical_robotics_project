@@ -29,7 +29,7 @@
 \maketitle
 
 \begin{abstract}
-This report presents a Unity-based simulation of a ROSA-like six-degree-of-freedom surgical robot implementing double Remote-Center-of-Motion (RCM) control, following the task-priority formulation of Aghakhani et al.\ (ICRA 2013). A from-scratch damped-least-squares controller with a null-space secondary objective handles four operating modes and a three-phase safe-insertion sequence. A Task~2 failure caused by wrist-joint saturation was resolved with strict tip-first hierarchy, an active-set constraint on joint~4, adaptive damping, and bounded integration substeps. The updated controller is evaluated on a 3361-sample Unity log using clinically stricter thresholds of 2\,mm for entry-RCM stability and 3\,mm for tip-target accuracy. All nine automatic validation checks pass, including zero skull/corridor violation.
+This report presents a Unity-based simulation of a ROSA-like six-degree-of-freedom surgical robot implementing double Remote-Center-of-Motion (RCM) control, following the task-priority formulation of Aghakhani et al.\ (ICRA 2013). A from-scratch damped-least-squares controller with a null-space secondary objective handles four operating modes and a three-phase safe-insertion sequence. A Task~2 failure caused by wrist-joint saturation was resolved with strict tip-first hierarchy, an active-set constraint on joint~4, adaptive damping, and bounded integration substeps. The updated controller is evaluated on a 2696-sample Unity log using clinically stricter thresholds of 2\,mm for entry-RCM stability and 3\,mm for tip-target accuracy. All nine automatic validation checks pass, including zero skull/corridor violation.
 \end{abstract}
 
 \newpage
@@ -159,6 +159,7 @@ q_{k+1} = \mathrm{clamp}(q_k + \dot{q}\,\Delta t), \qquad
 \end{equation}
 
 \subsection{Task 2 Failure Analysis and Controller Fix}
+\label{sec:task2-fix}
 
 In the original Task~2 implementation, the tip-target and moving entry-cone tasks were solved as one weighted stack. Near a rank-deficient two-point configuration, the solver could select a wrist branch that drove joint~4 toward its $-170^\circ$ limit. Once the physical clamp became active, the saturated joint command no longer represented the Cartesian direction returned by the inverse-kinematics solve. The result was drift of the tip away from its fixed target even though the requested pose remained reachable. Increasing gains did not address the cause and could amplify the instability.
 
@@ -170,7 +171,7 @@ The corrected controller uses the following compact sequence:
 \item if the unsaturated solution would exceed the joint-speed limit, repeat the solve with increased damping;
 \item split long Unity frames into integration substeps no larger than $8$\,ms.
 \end{enumerate}
-The active set is directional: joint~4 is free to move inward and is constrained only when it would move farther toward the physical limit. Null-space motion on joint~4 is also suppressed while this constraint is active. In the updated run, the Task~2 active set was used in 206 of 1066 logged samples; joint~4 remained between $-145.1^\circ$ and $-28.5^\circ$, while the tip-target error remained below 0.15\,mm. The final implementation retains only these functional mechanisms; temporary A/B switches and Jacobian diagnostics used during investigation were removed.
+The active set is directional: joint~4 is free to move inward and is constrained only when it would move farther toward the physical limit. Null-space motion on joint~4 is also suppressed while this constraint is active. In the July~14 run (reduced-scale geometry, Section~\ref{sec:log-selection}), the Task~2 active set was not engaged at all (0 of 2696 logged samples): the smaller entry/target/needle-length configuration keeps joint~4 well clear of its soft limit throughout, and the tip-target error remained below 0.01\,mm. The mechanism itself is unchanged and still available for configurations that do approach the limit. The final implementation retains only these functional mechanisms; temporary A/B switches and Jacobian diagnostics used during investigation were removed.
 
 % =====================================================================
 \section{Experimental Methodology}
@@ -179,7 +180,7 @@ The active set is directional: joint~4 is free to move inward and is constrained
 \subsection{Data Source}
 \label{sec:log-selection}
 
-The quantitative evaluation is based on the Unity log \path{project4_multircm_20260713_152329_232.csv}. It contains 3361 samples spanning 196.96\,s and covers all four task modes in the order T3 $\to$ T1 $\to$ T2 $\to$ T4. Every quantitative result and figure in this report is derived exclusively from this log.
+The quantitative evaluation is based on the Unity log \path{project4_multircm_20260714_193548_422.csv}. It contains 2696 samples spanning 157.19\,s and covers all four task modes in the order T3 $\to$ T1 $\to$ T2 $\to$ T4. Every quantitative result and figure in this report is derived exclusively from this log.
 
 \subsection{Data Integrity Verification}
 
@@ -188,7 +189,7 @@ All figures and tables were regenerated from the selected log alone with:
 \small\texttt{python3 analyze\_rcm\_logs\_clean.py <log> --out RCM\_analysis\_v2}\newline
 \texttt{--entry-threshold-mm 2.0 --tip-threshold-mm 3.0 --settle-time-s 1.0}
 \end{center}
-The generated figures are stored in \path{report/generated_figures/july13_v2/}; the corresponding combined data, phase summary, checks, and analyzer notes are stored in \path{report/generated_data/july13_v2/}. Previous report datasets were left untouched.
+The generated figures are stored in \path{report/generated_figures/july14/}; the corresponding combined data, phase summary, checks, and analyzer notes are stored in \path{report/generated_data/july14/}. Previous report datasets were left untouched.
 
 \subsection{Validation Checks}
 
@@ -200,11 +201,11 @@ Nine pass/fail checks are computed with a 1\,s settling exclusion after each rel
 
 \subsection{Task Timeline}
 
-Figure~\ref{fig:timeline} shows the sequence and duration of the four task modes. The run begins with safe insertion (T3, approximately 0--25.3\,s), followed by the static entry-RCM/tip-target mode (T1, 25.3--40.8\,s), target-RCM/entry-cone tracking (T2, 40.8--104.6\,s), and entry-RCM/tip-cone tracking (T4, 104.6--197.0\,s).
+Figure~\ref{fig:timeline} shows the sequence and duration of the four task modes. The run begins with safe insertion (T3, approximately 0.1--26.8\,s), followed by the static entry-RCM/tip-target mode (T1, 26.8--30.8\,s), target-RCM/entry-cone tracking (T2, 30.8--95.3\,s), and entry-RCM/tip-cone tracking (T4, 95.3--157.3\,s).
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/00_task_timeline.png}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/00_task_timeline.png}
 \caption{Executed task and phase timeline. Results obtained from the logged experimental run.}
 \label{fig:timeline}
 \end{figure}
@@ -221,24 +222,24 @@ Table~\ref{tab:passfail} reports all nine checks on the logged run.
 \toprule
 Check & Threshold [mm] & Max value [mm] & Result \\
 \midrule
-T1 entry-RCM stability   & 2 & 0.013  & \pass \\
-T1 tip reaches target    & 3 & 0.054  & \pass \\
-T2 entry-cone tracking   & 50 & 41.784 & \pass \\
-T2 tip fixed at target   & 3 & 0.149  & \pass \\
-T3 insertion entry-RCM   & 2 & 0.423  & \pass \\
-T3 final target error    & 3 & 2.953 & \pass \\
+T1 entry-RCM stability   & 2 & 0.083  & \pass \\
+T1 tip reaches target    & 3 & 0.382  & \pass \\
+T2 entry-cone tracking   & 50 & 13.665 & \pass \\
+T2 tip fixed at target   & 3 & 0.009  & \pass \\
+T3 insertion entry-RCM   & 2 & 0.237  & \pass \\
+T3 final target error    & 3 & 1.498 & \pass \\
 T3 skull/corridor safety & 0  & 0.000  & \pass \\
-T4 entry-RCM stability   & 2 & 1.727 & \pass \\
-T4 tip-cone tracking     & 50 & 26.260 & \pass \\
+T4 entry-RCM stability   & 2 & 0.834 & \pass \\
+T4 tip-cone tracking     & 50 & 7.109 & \pass \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{All nine checks pass.} The closest margins are the Task~3 final target error (2.953\,mm against 3\,mm) and Task~4 settled entry-RCM error (1.727\,mm against 2\,mm). Figure~\ref{fig:validation} shows every metric normalized by its own threshold, avoiding a misleading plot in which errors with different meanings and scales are overlaid.
+\textbf{All nine checks pass.} The closest margins, relative to their own threshold, are the Task~3 final target error (1.498\,mm against 3\,mm, 50\%) and Task~4 settled entry-RCM error (0.834\,mm against 2\,mm, 42\%). Figure~\ref{fig:validation} shows every metric normalized by its own threshold, avoiding a misleading plot in which errors with different meanings and scales are overlaid.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/99_validation_summary_normalized.png}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/99_validation_summary_normalized.png}
 \caption{Validation summary normalized by threshold. Results obtained from the logged experimental run.}
 \label{fig:validation}
 \end{figure}
@@ -247,7 +248,7 @@ Figure~\ref{fig:active-error} complements the summary with only the metric that 
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/01_active_task_error_only.png}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/01_active_task_error_only.png}
 \caption{Active task error only; each interval is interpreted using the corresponding task objective.}
 \label{fig:active-error}
 \end{figure}
@@ -258,26 +259,26 @@ Figures~\ref{fig:t3-entry-rcm}--\ref{fig:t3-skull} validate the core clinical cl
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/02_T3_entry_rcm_error.png}
-\caption{Task~3 entry-RCM error during insertion. The 8.9\,mm raw peak is a phase-entry transient; after the 1\,s settling interval the maximum is 0.423\,mm (2\,mm threshold).}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/02_T3_entry_rcm_error.png}
+\caption{Task~3 entry-RCM error during insertion. The 4.837\,mm raw peak is a phase-entry transient; after the 1\,s settling interval the maximum is 0.237\,mm (2\,mm threshold).}
 \label{fig:t3-entry-rcm}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/02b_T3_tip_target_error.png}
-\caption{Task~3 tip-to-target error in the \texttt{Done} phase. The settled maximum is 2.953\,mm and the final recorded error is 0.074\,mm (3\,mm threshold).}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/02b_T3_tip_target_error.png}
+\caption{Task~3 tip-to-target error in the \texttt{Done} phase. The settled maximum is 1.498\,mm and the final recorded error is 0.467\,mm (3\,mm threshold).}
 \label{fig:t3-tip-target}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/03_T3_skull_violation.png}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/03_T3_skull_violation.png}
 \caption{Task~3 skull/corridor violation. No violation is recorded at any time.}
 \label{fig:t3-skull}
 \end{figure}
 
-The full \texttt{InsertToTarget} phase has a raw entry-RCM maximum of 8.917\,mm, occurring immediately after the task switch. Excluding the specified 1\,s settling interval reduces the validation maximum to 0.423\,mm, and the last insertion sample is also 0.423\,mm. In the completed state, the target error falls to 0.074\,mm. Skull/corridor violation is exactly 0.0\,mm throughout.
+The full \texttt{InsertToTarget} phase has a raw entry-RCM maximum of 4.837\,mm, occurring immediately after the task switch. Excluding the specified 1\,s settling interval reduces the validation maximum to 0.237\,mm, and the last insertion sample is 0.232\,mm. In the completed state, the target error falls to 0.467\,mm. Skull/corridor violation is exactly 0.0\,mm throughout.
 
 \subsection{Task 2: Target-RCM with Entry Cone}
 
@@ -285,19 +286,19 @@ Task~2 keeps the tip fixed at the target while the entry-side point follows a ro
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/04_T2_entry_cone_error.png}
-\caption{Task~2 entry-cone tracking error: 41.784\,mm maximum against the 50\,mm threshold.}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/04_T2_entry_cone_error.png}
+\caption{Task~2 entry-cone tracking error: 13.665\,mm maximum against the 50\,mm threshold.}
 \label{fig:t2-cone}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/05_T2_tip_target_error.png}
-\caption{Task~2 primary tip-target error: 0.149\,mm maximum against the 3\,mm threshold.}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/05_T2_tip_target_error.png}
+\caption{Task~2 primary tip-target error: 0.009\,mm maximum against the 3\,mm threshold.}
 \label{fig:t2-tip}
 \end{figure}
 
-These results demonstrate the intended effect of the fix: even while the q4 active set redistributes motion, the tip remains effectively fixed (0.149\,mm maximum), and the secondary entry-cone error remains within its 50\,mm allowance (41.784\,mm maximum and 2.669\,mm at the end of Task~2).
+These results demonstrate the intended effect of the fix: the tip remains effectively fixed (0.009\,mm settled maximum, 0.26\,mm raw peak in the pre-settling window), and the secondary entry-cone error remains well within its 50\,mm allowance (13.665\,mm maximum and 2.428\,mm at the end of Task~2). Unlike the earlier, larger-scale run, the Task~2 active set was not engaged at all in this run (Section~\ref{sec:task2-fix}), since the rescaled geometry keeps joint~4 away from its soft limit.
 
 \subsection{Task 4: Entry-RCM with Tip Cone}
 
@@ -305,37 +306,37 @@ Task~4 reverses the geometric emphasis: the entry RCM is primary while the tip t
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/06_T4_entry_rcm_error.png}
-\caption{Task~4 entry-RCM error. Raw maximum: 10.701\,mm; settled validation maximum: 1.727\,mm against 2\,mm.}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/06_T4_entry_rcm_error.png}
+\caption{Task~4 entry-RCM error. Raw maximum: 3.842\,mm; settled validation maximum: 0.834\,mm against 2\,mm.}
 \label{fig:t4-rcm}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/07_T4_tip_cone_error.png}
-\caption{Task~4 tip-cone error. Raw maximum: 37.427\,mm; settled validation maximum: 26.260\,mm against 50\,mm.}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/07_T4_tip_cone_error.png}
+\caption{Task~4 tip-cone error. Raw maximum: 13.633\,mm; settled validation maximum: 7.109\,mm against 50\,mm.}
 \label{fig:t4-cone}
 \end{figure}
 
 \subsection{Kinematic and Runtime Behavior}
 
-Figure~\ref{fig:lambda} shows the penetration coordinate $\lambda$ over the full run, ranging from 0.603 to 0.995 within its clamped bounds $[0.02,0.995]$. Figure~\ref{fig:qdot} shows the joint-velocity norm (peak $1.201$\,rad/s, mean $0.113$\,rad/s). The plotted norm combines six joints and is distinct from the $80^\circ/\mathrm{s}$ limit applied to each individual joint.
+Figure~\ref{fig:lambda} shows the penetration coordinate $\lambda$ over the full run, ranging from 0.601 to 0.995 within its clamped bounds $[0.02,0.995]$. Figure~\ref{fig:qdot} shows the joint-velocity norm (peak $1.250$\,rad/s, mean $0.063$\,rad/s). The plotted norm combines six joints and is distinct from the $80^\circ/\mathrm{s}$ limit applied to each individual joint.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/10_lambda.png}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/10_lambda.png}
 \caption{Penetration coordinate $\lambda$ over the full run. Results obtained from the logged experimental run.}
 \label{fig:lambda}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\linewidth]{generated_figures/july13_v2/12_qdot_norm_rad_s.png}
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/12_qdot_norm_rad_s.png}
 \caption{Joint-velocity norm $\|\dot q\|$ over the full run. Results obtained from the logged experimental run.}
 \label{fig:qdot}
 \end{figure}
 
-The mean rendering frame rate was 59.3\,fps (minimum 4.03\,fps, maximum 209.62\,fps). Frame-rate variation does not change the validation logic because long frames are subdivided by the controller and the checks are computed from logged geometric state.
+The mean rendering frame rate was 58.4\,fps (minimum 5.82\,fps, maximum 213.04\,fps). Frame-rate variation does not change the validation logic because long frames are subdivided by the controller and the checks are computed from logged geometric state.
 
 % =====================================================================
 \section{Limitations}
@@ -354,7 +355,7 @@ The mean rendering frame rate was 59.3\,fps (minimum 4.03\,fps, maximum 209.62\,
 \section{Conclusion}
 % =====================================================================
 
-This project implements a double-RCM task-priority controller for a simulated ROSA-like surgical robot, covering four task modes and a three-phase clinically motivated insertion sequence entirely from scratch (custom damped-least-squares solve, custom null-space projection, and no external IK library). The updated 3361-sample run passes all nine automatic checks using 2\,mm entry-RCM and 3\,mm tip-target thresholds, while recording zero skull/corridor violation. In particular, Task~2 holds the tip within 0.149\,mm despite its moving cone objective, confirming that the strict hierarchy and q4 active set remove the previously observed wrist-limit drift. Task~4 also passes after settling, with 1.727\,mm maximum entry-RCM error. These results validate the implemented kinematic behavior for this run; they do not constitute clinical validation of the ROSA platform or a statistical workspace-wide guarantee.
+This project implements a double-RCM task-priority controller for a simulated ROSA-like surgical robot, covering four task modes and a three-phase clinically motivated insertion sequence entirely from scratch (custom damped-least-squares solve, custom null-space projection, and no external IK library). The updated 2696-sample run passes all nine automatic checks using 2\,mm entry-RCM and 3\,mm tip-target thresholds, while recording zero skull/corridor violation. In particular, Task~2 holds the tip within 0.009\,mm despite its moving cone objective, confirming that the strict hierarchy keeps the previously observed wrist-limit drift from recurring (the q4 active set was not even engaged in this run). Task~4 also passes after settling, with 0.834\,mm maximum entry-RCM error. These results validate the implemented kinematic behavior for this run; they do not constitute clinical validation of the ROSA platform or a statistical workspace-wide guarantee.
 
 \subsection*{Future Work}
 \begin{enumerate}

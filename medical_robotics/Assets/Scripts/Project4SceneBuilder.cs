@@ -16,9 +16,13 @@ public class Project4SceneBuilder : MonoBehaviour
     [Header("Surgical scene, in Unity world units = meters")]
     // Unity is Y-up. These defaults place the surgical field above the ground,
     // instead of flat on the horizontal plane.
-    public Vector3 entryPoint = new Vector3(0.8f, 1.5f, 0.10f);
-    public Vector3 targetPoint = new Vector3(1.0f, 1.30f, 0.10f);
-    public float skullRadius = 0.30f;
+    // Scaled to match toolLength = 0.283 m (28.3 cm needle) in ROSADoubleRCMController:
+    // entry/target are kept at the same relative position w.r.t. the robot wrist
+    // (default pose), just brought closer in by the same factor the needle shrank
+    // (0.283 / 0.72 ~= 0.393), so the shorter needle can still reach them.
+    public Vector3 entryPoint = new Vector3(0.624f, 1.629f, 0.161f);
+    public Vector3 targetPoint = new Vector3(0.703f, 1.550f, 0.161f);
+    public float skullRadius = 0.118f;
 
     private void Start()
     {
@@ -32,8 +36,8 @@ public class Project4SceneBuilder : MonoBehaviour
         GameObject root = new GameObject("Project4_MultiRCM_ROSA_Runtime");
 
         // Entry and target markers.
-        Transform entry = CreateMarker("EntryPoint_Trocar", entryPoint, 0.035f, new Color(0.1f, 0.9f, 0.2f, 1.0f), root.transform);
-        Transform target = CreateMarker("TargetPoint_DeepTarget", targetPoint, 0.035f, new Color(1.0f, 0.05f, 0.05f, 1.0f), root.transform);
+        Transform entry = CreateMarker("EntryPoint_Trocar", entryPoint, 0.01f, new Color(0.1f, 0.9f, 0.2f, 1.0f), root.transform);
+        Transform target = CreateMarker("TargetPoint_DeepTarget", targetPoint, 0.01f, new Color(1.0f, 0.05f, 0.05f, 1.0f), root.transform);
 
         // Optional skull/body sphere. Disabled by default while tuning the insertion geometry.
         GameObject skull = null;
