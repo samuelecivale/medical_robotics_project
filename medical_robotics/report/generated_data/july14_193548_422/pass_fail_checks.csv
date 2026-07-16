@@ -1,0 +1,10 @@
+check,metric,max_value,threshold,unit,passed,samples
+T1 entry RCM stability,entry_rcm_error_mm,0.083,2.0,mm,True,53
+T1 tip reaches target,tip_target_error_mm,0.382,3.0,mm,True,53
+T2 entry-cone tracking,task2_entry_cone_error_mm,13.665,50.0,mm,True,1078
+T2 tip fixed at target,tip_target_error_mm,0.009,3.0,mm,True,1078
+T3 insertion Entry-RCM,entry_rcm_error_mm,0.237,2.0,mm,True,315
+T3 final target,tip_target_error_mm,1.498,3.0,mm,True,155
+T3 skull/corridor safety,skull_violation_mm,0.0,0.0,mm,True,414
+T4 Entry-RCM stability,entry_rcm_error_mm,0.834,2.0,mm,True,1021
+T4 tip-cone tracking,task4_tip_cone_error_mm,7.109,50.0,mm,True,1021

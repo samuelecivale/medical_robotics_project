@@ -1,0 +1,5 @@
+task,n_samples,t_start_s,t_end_s,duration_s,active_task_error_mean_mm,active_task_error_rms_mm,active_task_error_max_mm,qdot_norm_mean_rad_s,qdot_norm_max_rad_s,fps_mean,fps_min,lambda_start,lambda_end,source_log
+T3_safe_insertion,490,0.07,26.773,26.704,69.3938,98.6973,207.694,0.0922,0.6605,67.6159,19.28,0.995,0.6054,RCM_logs/project4_multircm_20260714_193548_422.csv
+T1_entry_rcm_tip_target,71,26.84,30.782,3.943,0.3526,0.3548,0.448,0.0035,0.0043,55.8872,26.88,0.6054,0.6052,RCM_logs/project4_multircm_20260714_193548_422.csv
+T2_target_rcm_entry_cone,1097,30.837,95.211,64.374,4.9558,6.1312,13.665,0.0425,0.1821,53.9368,13.11,0.995,0.995,RCM_logs/project4_multircm_20260714_193548_422.csv
+T4_entry_rcm_tip_cone,1038,95.264,157.258,61.994,3.2364,3.7468,13.633,0.0742,1.25,58.856,5.82,0.6072,0.6029,RCM_logs/project4_multircm_20260714_193548_422.csv

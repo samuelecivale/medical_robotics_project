@@ -1,0 +1,369 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{float}
+\usepackage{microtype}
+\usepackage{seqsplit}
+
+\emergencystretch=3em
+\sloppy
+
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, citecolor=blue!50!black, urlcolor=blue!50!black}
+
+\newcommand{\pass}{\textcolor{teal!70!black}{\textbf{PASS}}}
+
+\title{\textbf{Multi-RCM Kinematic Control for a ROSA-like Surgical Robot} \\[4pt]
+\large A Unity Simulation of Double Remote-Center-of-Motion Control}
+\author{Samuele Civale \\ Francesca Forghieri \\ Alexandru Vivian Pita \\}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report presents a Unity-based simulation of a ROSA-like six-degree-of-freedom surgical robot implementing double Remote-Center-of-Motion (RCM) control, following the task-priority formulation of Aghakhani et al.\ (ICRA 2013). A from-scratch damped-least-squares controller with a null-space secondary objective handles four operating modes and a three-phase safe-insertion sequence. A Task~2 failure caused by wrist-joint saturation was resolved with strict tip-first hierarchy, an active-set constraint on joint~4, adaptive damping, and bounded integration substeps. The updated controller is evaluated on a 2696-sample Unity log using clinically stricter thresholds of 2\,mm for entry-RCM stability and 3\,mm for tip-target accuracy. All nine automatic validation checks pass, including zero skull/corridor violation.
+\end{abstract}
+
+\newpage
+\tableofcontents
+
+\newpage
+% =====================================================================
+\section{Introduction and Clinical Motivation}
+% =====================================================================
+
+Stereotactic neurosurgical procedures --- biopsy, electrode placement, catheter insertion --- require a rigid tool to reach a deep target through a single, pre-planned skull opening. Once the entry point is fixed, any lateral force exerted by the tool shaft against the edges of that opening risks tearing or bruising healthy tissue along the corridor. Robotic assistance can enforce this constraint far more precisely than a hand-guided or passively braced instrument: the robot's controller can be made to guarantee that the tool axis always intersects the entry point, regardless of how the arm reconfigures to reach different targets.
+
+The mechanism that formalizes this guarantee is the \emph{Remote Center of Motion} (RCM): a virtual pivot point, external to the robot's own mechanical structure, through which the tool shaft is constrained to pass at all times. Unlike a mechanical RCM (a physical gimbal, as used in some laparoscopic robots), the RCM studied here is purely a \emph{control} objective, implemented as an additional task in a task-priority kinematic controller.
+
+This project implements and validates such a controller in Unity, for a ROSA-like six-degree-of-freedom manipulator, following the double-RCM task formulation of Aghakhani et al.\ (ICRA 2013), in which the RCM constraint can be located either at the entry point or, in an alternate mode, effectively relocated to the target itself.
+
+% =====================================================================
+\section{The Remote-Center-of-Motion Concept}
+% =====================================================================
+
+The RCM point is expressed as a point sliding along the tool shaft:
+\begin{equation}
+p_{\mathrm{RCM}}(q, \lambda) = p_{\mathrm{base}}(q) + \lambda \, L \, z(q),
+\end{equation}
+where $p_{\mathrm{base}}(q)$ is the position of the tool's proximal reference point (a function of the joint configuration $q$), $z(q)$ is the tool's axial unit vector, $L$ is the tool length, and $\lambda \in [0.02, 0.995]$ is a dimensionless \emph{penetration coordinate} that slides the candidate RCM point along the shaft as insertion proceeds. The controller drives $\lambda$ together with the joint velocities so that $p_{\mathrm{RCM}}(q,\lambda)$ coincides with the desired entry (or target) marker, without requiring any physical hinge at that location.
+
+Enforcing this constraint changes the character of the motion completely. Without it, nothing prevents the shaft from levering sideways against the entry point as the arm reconfigures to track a moving target. With the RCM task stacked alongside the tip task, the controller can move the tip to a new target while keeping the pivot locked at the entry, or --- in the alternate task modes studied here --- relocate the effective pivot to the target while the entry side sweeps a bounded cone. This is the ``double RCM'' idea referenced in the title: the same controller structure realizes an RCM at the entry \emph{or} at the target, selected by which task mode is active.
+
+% =====================================================================
+\section{System Description}
+% =====================================================================
+
+\subsection{Simulated Manipulator}
+
+The manipulator is a procedurally generated six-degree-of-freedom serial arm with a ROSA-\emph{like} (plausible, not vendor-measured) Denavit--Hartenberg table, summarized in Table~\ref{tab:dh}. Joint limits are symmetric except for the last joint (wrist roll), which is effectively unbounded ($\pm 360^\circ$).
+
+\begin{table}[H]
+\centering
+\caption{Denavit--Hartenberg parameters used for the procedural arm (as implemented in \texttt{ROSADoubleRCMController.cs}).}
+\label{tab:dh}
+\begin{tabular}{c c c c c c}
+\toprule
+Link & $a$ [m] & $\alpha$ [deg] & $d$ [m] & $\theta_{\mathrm{offset}}$ [deg] & Joint range [deg] \\
+\midrule
+1 & 0.045 & $-90$ & 0.42 & 0 & $[-170, 170]$ \\
+2 & 0.42  & 0     & 0.00 & 0 & $[-120, 120]$ \\
+3 & 0.055 & $-90$ & 0.00 & 0 & $[-150, 150]$ \\
+4 & 0.000 & 90    & 0.36 & 0 & $[-170, 170]$ \\
+5 & 0.000 & $-90$ & 0.00 & 0 & $[-120, 120]$ \\
+6 & 0.000 & 0     & 0.12 & 0 & $[-360, 360]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The scene, arm, needle tool, and target/entry markers are all built procedurally at runtime by a single script (\texttt{Project4SceneBuilder.cs}), rather than hand-assembled in the Unity editor, keeping the project self-contained and reproducible. A second script (\texttt{FreeFlyCameraKeyboard.cs}) provides an independent keyboard fly-camera for visual inspection and screen recording; it has no effect on the controller or the logged data.
+
+\subsection{Task Modes}
+
+All logic --- kinematics, the control law, the insertion state machine, the on-screen overlay, and CSV logging --- lives in a single controller script, \texttt{ROSADoubleRCMController.cs}. It exposes five mutually exclusive modes, four of which are active task modes (Table~\ref{tab:modes}); the fifth, \texttt{Hold}, freezes the arm and is not part of the validated task set.
+
+\begin{table}[H]
+\centering
+\caption{Task modes implemented in the controller.}
+\label{tab:modes}
+\begin{tabular}{c l p{7cm}}
+\toprule
+Task & Enum name & Description \\
+\midrule
+T1 & \texttt{EntryRCM\_TipTarget} & RCM locked at the entry point while the tip tracks a fixed target. \\
+T2 & \texttt{TargetRCM\_EntryCone} & RCM relocated to the target while the entry side sweeps a bounded cone. \\
+T3 & \texttt{InsertionSequence} & Three-phase safe-insertion sequence (the main clinical task, Section~\ref{sec:task3}). \\
+T4 & \texttt{EntryRCM\_TipConeAroundTarget} & RCM locked at the entry while the tip sweeps a bounded cone around the target. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Task 3: The Safe-Insertion Sequence}
+\label{sec:task3}
+
+Task 3 is a three-phase finite-state machine that mirrors the intended clinical workflow (a fourth internal state, \texttt{Done}, marks completion):
+
+\begin{enumerate}
+\item \textbf{ApproachEntry} --- the needle axis is aligned with the entry--target line while the tip approaches from outside the trocar; the RCM constraint is \emph{not yet} active.
+\item \textbf{PierceEntry} --- the tip travels from the outside approach point to the entry (trocar) point.
+\item \textbf{InsertToTarget} --- the RCM is locked at the entry point and the tip advances along the shaft axis to the target, terminating in the \texttt{Done} state once both the insertion progress and the tip-to-target distance fall below fixed thresholds.
+\end{enumerate}
+
+% =====================================================================
+\section{Controller Architecture}
+% =====================================================================
+
+\subsection{Task-Priority Formulation}
+
+At every control step, the active point tasks (tip position, entry/target cone tracking, and the RCM point) are stacked into a single differential kinematics problem:
+\begin{equation}
+\begin{bmatrix} \dot{x}_{\mathrm{task}} \\ \dot{x}_{\mathrm{RCM}} \end{bmatrix}
+=
+\begin{bmatrix} J_{\mathrm{task}} & 0 \\ J_{\mathrm{RCM}} \end{bmatrix}
+\begin{bmatrix} \dot{q} \\ \dot{\lambda} \end{bmatrix},
+\end{equation}
+where each row block is itself the vertical stack of whichever point tasks are active in the current mode. Each task's desired velocity is a saturated proportional term on its Cartesian error,
+\begin{equation}
+\dot{y}_i = K_i \, \bigl(x_{\mathrm{des},i} - x_i\bigr), \qquad \text{saturated to a maximum magnitude},
+\end{equation}
+with per-task gains $K_{\mathrm{tip}} = 3.5$, $K_{\mathrm{RCM}} = 17.0$, and $K_{\mathrm{cone}} = 6.0$ (as configured in \texttt{ROSADoubleRCMController.cs}). The comparatively high RCM gain reflects the priority given to the safety constraint over tracking accuracy.
+
+The stacked system is solved with a damped least-squares (Levenberg--Marquardt-style) pseudoinverse,
+\begin{equation}
+\begin{bmatrix} \dot{q} \\ \dot{\lambda} \end{bmatrix}
+= J^{T} \left( J J^{T} + \mu^2 I \right)^{-1} \dot{y}, \qquad \mu = 0.055,
+\end{equation}
+implemented from scratch with a custom Gauss--Jordan linear solver; no external inverse-kinematics or optimization library is used. Jacobians are computed by numerical finite differencing rather than symbolically, a deliberate simplicity trade-off that keeps the Denavit--Hartenberg table easily replaceable at the cost of some numerical noise.
+
+A null-space secondary objective is projected into the kernel of $J$ and added on top of the primary solution,
+\begin{equation}
+\begin{bmatrix} \dot{q} \\ \dot{\lambda} \end{bmatrix}_{\mathrm{total}}
+=
+\begin{bmatrix} \dot{q} \\ \dot{\lambda} \end{bmatrix}
++ s \left( I - J^{+}J \right) w,
+\end{equation}
+with null-space scale $s = 0.55$ and $w$ combining three sub-objectives, each with its own gain: keeping $\lambda$ near a nominal target (gain $0.9$), keeping joints away from their limits (gain $0.08$), and biasing the arm away from the skull surface (gain $1.3$). The damped projector minimizes interference with primary tasks; Task~2 additionally suppresses the q4 null-space component whenever its active-set constraint is engaged.
+
+Finally, both joint and $\lambda$ velocities are saturated ($\dot{q}_{\max} = 80^\circ\!/\mathrm{s}$, $\dot{\lambda}_{\max} = 0.55\,\mathrm{s}^{-1}$) before Euler integration:
+\begin{equation}
+q_{k+1} = \mathrm{clamp}(q_k + \dot{q}\,\Delta t), \qquad
+\lambda_{k+1} = \mathrm{clamp}(\lambda_k + \dot\lambda\,\Delta t,\; 0.02,\; 0.995).
+\end{equation}
+
+\subsection{Task 2 Failure Analysis and Controller Fix}
+\label{sec:task2-fix}
+
+In the original Task~2 implementation, the tip-target and moving entry-cone tasks were solved as one weighted stack. Near a rank-deficient two-point configuration, the solver could select a wrist branch that drove joint~4 toward its $-170^\circ$ limit. Once the physical clamp became active, the saturated joint command no longer represented the Cartesian direction returned by the inverse-kinematics solve. The result was drift of the tip away from its fixed target even though the requested pose remained reachable. Increasing gains did not address the cause and could amplify the instability.
+
+The corrected controller uses the following compact sequence:
+\begin{enumerate}
+\item solve tip tracking as the primary Task~2 objective;
+\item project entry-cone tracking into the damped null space of the tip Jacobian;
+\item when joint~4 enters a $25^\circ$ soft margin and its command points farther outward, remove its Jacobian column, set $\dot q_4=0$, and redistribute the Cartesian command over the remaining joints and $\lambda$;
+\item if the unsaturated solution would exceed the joint-speed limit, repeat the solve with increased damping;
+\item split long Unity frames into integration substeps no larger than $8$\,ms.
+\end{enumerate}
+The active set is directional: joint~4 is free to move inward and is constrained only when it would move farther toward the physical limit. Null-space motion on joint~4 is also suppressed while this constraint is active. In the July~14 run (reduced-scale geometry, Section~\ref{sec:log-selection}), the Task~2 active set was not engaged at all (0 of 2696 logged samples): the smaller entry/target/needle-length configuration keeps joint~4 well clear of its soft limit throughout, and the tip-target error remained below 0.01\,mm. The mechanism itself is unchanged and still available for configurations that do approach the limit. The final implementation retains only these functional mechanisms; temporary A/B switches and Jacobian diagnostics used during investigation were removed.
+
+% =====================================================================
+\section{Experimental Methodology}
+% =====================================================================
+
+\subsection{Data Source}
+\label{sec:log-selection}
+
+The quantitative evaluation is based on the Unity log \path{project4_multircm_20260714_193548_422.csv}. It contains 2696 samples spanning 157.19\,s and covers all four task modes in the order T3 $\to$ T1 $\to$ T2 $\to$ T4. Every quantitative result and figure in this report is derived exclusively from this log.
+
+\subsection{Data Integrity Verification}
+
+All figures and tables were regenerated from the selected log alone with:
+\begin{center}
+\small\texttt{python3 analyze\_rcm\_logs\_clean.py <log> --out RCM\_analysis\_v2}\newline
+\texttt{--entry-threshold-mm 2.0 --tip-threshold-mm 3.0 --settle-time-s 1.0}
+\end{center}
+The generated figures are stored in \path{report/generated_figures/july14/}; the corresponding combined data, phase summary, checks, and analyzer notes are stored in \path{report/generated_data/july14/}. Previous report datasets were left untouched.
+
+\subsection{Validation Checks}
+
+Nine pass/fail checks are computed with a 1\,s settling exclusion after each relevant task or phase transition. The thresholds are: entry-RCM stability $\leq 2$\,mm, tip-target tracking $\leq 3$\,mm, entry-/tip-cone tracking $\leq 50$\,mm, and skull/corridor violation $\leq 0$\,mm. Raw phase maxima are still reported in the plots and discussion; therefore they can be higher than the settled values used by the automatic checks.
+
+% =====================================================================
+\section{Results}
+% =====================================================================
+
+\subsection{Task Timeline}
+
+Figure~\ref{fig:timeline} shows the sequence and duration of the four task modes. The run begins with safe insertion (T3, approximately 0.1--26.8\,s), followed by the static entry-RCM/tip-target mode (T1, 26.8--30.8\,s), target-RCM/entry-cone tracking (T2, 30.8--95.3\,s), and entry-RCM/tip-cone tracking (T4, 95.3--157.3\,s).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/00_task_timeline.png}
+\caption{Executed task and phase timeline. Results obtained from the logged experimental run.}
+\label{fig:timeline}
+\end{figure}
+
+\subsection{Overall Validation Summary}
+
+Table~\ref{tab:passfail} reports all nine checks on the logged run.
+
+\begin{table}[H]
+\centering
+\caption{Validation checks.}
+\label{tab:passfail}
+\begin{tabular}{l l r r}
+\toprule
+Check & Threshold [mm] & Max value [mm] & Result \\
+\midrule
+T1 entry-RCM stability   & 2 & 0.083  & \pass \\
+T1 tip reaches target    & 3 & 0.382  & \pass \\
+T2 entry-cone tracking   & 50 & 13.665 & \pass \\
+T2 tip fixed at target   & 3 & 0.009  & \pass \\
+T3 insertion entry-RCM   & 2 & 0.237  & \pass \\
+T3 final target error    & 3 & 1.498 & \pass \\
+T3 skull/corridor safety & 0  & 0.000  & \pass \\
+T4 entry-RCM stability   & 2 & 0.834 & \pass \\
+T4 tip-cone tracking     & 50 & 7.109 & \pass \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{All nine checks pass.} The closest margins, relative to their own threshold, are the Task~3 final target error (1.498\,mm against 3\,mm, 50\%) and Task~4 settled entry-RCM error (0.834\,mm against 2\,mm, 42\%). Figure~\ref{fig:validation} shows every metric normalized by its own threshold, avoiding a misleading plot in which errors with different meanings and scales are overlaid.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/99_validation_summary_normalized.png}
+\caption{Validation summary normalized by threshold. Results obtained from the logged experimental run.}
+\label{fig:validation}
+\end{figure}
+
+Figure~\ref{fig:active-error} complements the summary with only the metric that is active in each interval. This task-aware view replaces the earlier all-errors plot, whose simultaneous curves mixed inactive geometric distances with actual tracking errors.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/01_active_task_error_only.png}
+\caption{Active task error only; each interval is interpreted using the corresponding task objective.}
+\label{fig:active-error}
+\end{figure}
+
+\subsection{Task 3: Safe Insertion}
+
+Figures~\ref{fig:t3-entry-rcm}--\ref{fig:t3-skull} validate the core clinical claim of Task~3: once insertion begins, the tool converges to the entry pivot, reaches the target, and remains inside the planned skull corridor.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/02_T3_entry_rcm_error.png}
+\caption{Task~3 entry-RCM error during insertion. The 4.837\,mm raw peak is a phase-entry transient; after the 1\,s settling interval the maximum is 0.237\,mm (2\,mm threshold).}
+\label{fig:t3-entry-rcm}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/02b_T3_tip_target_error.png}
+\caption{Task~3 tip-to-target error in the \texttt{Done} phase. The settled maximum is 1.498\,mm and the final recorded error is 0.467\,mm (3\,mm threshold).}
+\label{fig:t3-tip-target}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/03_T3_skull_violation.png}
+\caption{Task~3 skull/corridor violation. No violation is recorded at any time.}
+\label{fig:t3-skull}
+\end{figure}
+
+The full \texttt{InsertToTarget} phase has a raw entry-RCM maximum of 4.837\,mm, occurring immediately after the task switch. Excluding the specified 1\,s settling interval reduces the validation maximum to 0.237\,mm, and the last insertion sample is 0.232\,mm. In the completed state, the target error falls to 0.467\,mm. Skull/corridor violation is exactly 0.0\,mm throughout.
+
+\subsection{Task 2: Target-RCM with Entry Cone}
+
+Task~2 keeps the tip fixed at the target while the entry-side point follows a rotating cone. The tip is the strict primary objective and cone motion is secondary, so cone error is allowed to increase when the objectives compete near a joint limit.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/04_T2_entry_cone_error.png}
+\caption{Task~2 entry-cone tracking error: 13.665\,mm maximum against the 50\,mm threshold.}
+\label{fig:t2-cone}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/05_T2_tip_target_error.png}
+\caption{Task~2 primary tip-target error: 0.009\,mm maximum against the 3\,mm threshold.}
+\label{fig:t2-tip}
+\end{figure}
+
+These results demonstrate the intended effect of the fix: the tip remains effectively fixed (0.009\,mm settled maximum, 0.26\,mm raw peak in the pre-settling window), and the secondary entry-cone error remains well within its 50\,mm allowance (13.665\,mm maximum and 2.428\,mm at the end of Task~2). Unlike the earlier, larger-scale run, the Task~2 active set was not engaged at all in this run (Section~\ref{sec:task2-fix}), since the rescaled geometry keeps joint~4 away from its soft limit.
+
+\subsection{Task 4: Entry-RCM with Tip Cone}
+
+Task~4 reverses the geometric emphasis: the entry RCM is primary while the tip traces a cone around the deep target. The raw entry-RCM peak occurs at task activation; after settling, both validation metrics remain within threshold.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/06_T4_entry_rcm_error.png}
+\caption{Task~4 entry-RCM error. Raw maximum: 3.842\,mm; settled validation maximum: 0.834\,mm against 2\,mm.}
+\label{fig:t4-rcm}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/07_T4_tip_cone_error.png}
+\caption{Task~4 tip-cone error. Raw maximum: 13.633\,mm; settled validation maximum: 7.109\,mm against 50\,mm.}
+\label{fig:t4-cone}
+\end{figure}
+
+\subsection{Kinematic and Runtime Behavior}
+
+Figure~\ref{fig:lambda} shows the penetration coordinate $\lambda$ over the full run, ranging from 0.601 to 0.995 within its clamped bounds $[0.02,0.995]$. Figure~\ref{fig:qdot} shows the joint-velocity norm (peak $1.250$\,rad/s, mean $0.063$\,rad/s). The plotted norm combines six joints and is distinct from the $80^\circ/\mathrm{s}$ limit applied to each individual joint.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/10_lambda.png}
+\caption{Penetration coordinate $\lambda$ over the full run. Results obtained from the logged experimental run.}
+\label{fig:lambda}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{generated_figures/july14/12_qdot_norm_rad_s.png}
+\caption{Joint-velocity norm $\|\dot q\|$ over the full run. Results obtained from the logged experimental run.}
+\label{fig:qdot}
+\end{figure}
+
+The mean rendering frame rate was 58.4\,fps (minimum 5.82\,fps, maximum 213.04\,fps). Frame-rate variation does not change the validation logic because long frames are subdivided by the controller and the checks are computed from logged geometric state.
+
+% =====================================================================
+\section{Limitations}
+% =====================================================================
+
+\begin{itemize}
+\item The manipulator geometry is ROSA-\emph{like}: a plausible Denavit--Hartenberg table, not measured from an official CAD model.
+\item The needle is modeled as a rigid cylinder; there is no tissue interaction or deformation.
+\item The controller is purely kinematic: there is no dynamics or force control.
+\item Jacobians are computed numerically (finite differencing) rather than in closed form, trading some numerical accuracy for implementation simplicity and DH-table flexibility.
+\item Quantitative conclusions rest on a single logged run, not on repeated randomized trials. Passing all checks demonstrates this execution, not a statistical success rate over the complete workspace.
+\item The q4 active set is a velocity-level constraint rather than a predictive trajectory optimizer; future configurations may require active constraints on additional joints.
+\end{itemize}
+
+% =====================================================================
+\section{Conclusion}
+% =====================================================================
+
+This project implements a double-RCM task-priority controller for a simulated ROSA-like surgical robot, covering four task modes and a three-phase clinically motivated insertion sequence entirely from scratch (custom damped-least-squares solve, custom null-space projection, and no external IK library). The updated 2696-sample run passes all nine automatic checks using 2\,mm entry-RCM and 3\,mm tip-target thresholds, while recording zero skull/corridor violation. In particular, Task~2 holds the tip within 0.009\,mm despite its moving cone objective, confirming that the strict hierarchy keeps the previously observed wrist-limit drift from recurring (the q4 active set was not even engaged in this run). Task~4 also passes after settling, with 0.834\,mm maximum entry-RCM error. These results validate the implemented kinematic behavior for this run; they do not constitute clinical validation of the ROSA platform or a statistical workspace-wide guarantee.
+
+\subsection*{Future Work}
+\begin{enumerate}
+\item Replace the finite-difference Jacobian with an analytic one for speed and numerical robustness.
+\item Re-introduce anatomical constraints as an explicitly separate validation layer, rather than mixing them back into the core RCM logic.
+\item Adopt real ROSA kinematic parameters, if they become accessible.
+\item Run randomized multi-trial validation with matched task durations and repeated initial configurations, including configurations near every joint limit.
+\item Generalize the q4 active set to a compact multi-joint constrained solver if broader workspace tests expose saturation of other joints.
+\end{enumerate}
+
+\end{document}
