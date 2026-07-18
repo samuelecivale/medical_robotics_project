@@ -1,5 +1,0 @@
-check,metric,max_value,threshold,unit,passed,samples
-T1 entry RCM stability,entry_rcm_error_mm,72.799,2.0,mm,False,134
-T1 tip reaches target,tip_target_error_mm,72.286,3.0,mm,False,134
-T2 entry-cone tracking,task2_entry_cone_error_mm,3.743,50.0,mm,True,1785
-T2 tip fixed at target,tip_target_error_mm,1.011,3.0,mm,True,1785
